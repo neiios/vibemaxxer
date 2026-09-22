@@ -13,22 +13,19 @@ import (
 	"os"
 	"os/signal"
 	"sort"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 )
 
-func run(logger *slog.Logger) error {
-	args := os.Args[1:]
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return runProxy(logger, args, false) // Original flags-only plain mode.
+func run(logger *slog.Logger, args []string) error {
+	if len(args) == 0 {
+		printCommands(os.Stdout)
+		return nil
 	}
 	switch args[0] {
 	case "serve":
-		return runProxy(logger, args[1:], true)
-	case "plain":
-		return runProxy(logger, args[1:], false)
+		return runServer(logger, args[1:])
 	case "bridge":
 		return runBridge(logger, args[1:])
 	case "pair-code":
@@ -37,7 +34,7 @@ func run(logger *slog.Logger) error {
 		return runPair(args[1:], os.Stdin, os.Stderr)
 	case "clients":
 		return runClients(args[1:], os.Stdout)
-	case "help":
+	case "help", "-h", "-help", "--help":
 		printCommands(os.Stdout)
 		return nil
 	default:
@@ -53,10 +50,9 @@ func printCommands(out io.Writer) {
   pair        Read an invitation from stdin and pair this workstation
   bridge      Loopback HTTP proxy forwarding through paired TLS
   clients     List or revoke paired workstations (VPN host)
-  plain       Original unencrypted CONNECT listener (trusted LAN/SSH only)
 
-Use COMMAND -help for flags. Flags without a command retain legacy plain mode.
-Encrypted commands use ~/.config/vibemaxxer (or $XDG_CONFIG_HOME/vibemaxxer).
+Use COMMAND -help for flags. Running without a command prints this help.
+Commands use ~/.config/vibemaxxer (or $XDG_CONFIG_HOME/vibemaxxer).
 Override this with -state-dir, consistently for commands on the same machine.`)
 }
 

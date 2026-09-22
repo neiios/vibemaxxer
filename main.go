@@ -1,4 +1,4 @@
-// vibemaxxer is a small, access-controlled HTTP CONNECT proxy.
+// vibemaxxer is a paired TLS proxy with a loopback HTTP CONNECT bridge.
 package main
 
 import (
@@ -29,7 +29,8 @@ func (a *allowFlags) Set(value string) error {
 
 func parseAllow(values []string) ([]netip.Prefix, error) {
 	if len(values) == 0 {
-		values = []string{"127.0.0.0/8", "::1/128"}
+		// Pairing is mandatory; an IP allowlist is an optional extra restriction.
+		values = []string{"0.0.0.0/0", "::/0"}
 	}
 	prefixes := make([]netip.Prefix, 0, len(values))
 	for _, value := range values {
@@ -61,59 +62,38 @@ func parsePorts(value string) (map[int]bool, error) {
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(logger); err != nil && !errors.Is(err, flag.ErrHelp) {
+	if err := run(logger, os.Args[1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 		logger.Error("exiting", "error", err)
 		os.Exit(1)
 	}
 }
 
-func runProxy(logger *slog.Logger, args []string, encrypted bool) error {
+func runServer(logger *slog.Logger, args []string) error {
 	var clients allowFlags
-	mode, defaultListen := "plain", "127.0.0.1:8888"
-	if encrypted {
-		mode, defaultListen = "serve", "127.0.0.1:8443"
-	}
-	flags := flag.NewFlagSet(mode, flag.ContinueOnError)
-	flags.Usage = func() {
-		printCommands(flags.Output())
-		fmt.Fprintf(flags.Output(), "\n%s flags:\n", mode)
-		flags.PrintDefaults()
-	}
-	listen := flags.String("listen", defaultListen, "literal IP:port to listen on")
-	flags.Var(&clients, "allow", "allowed client IP or CIDR; repeatable (serve: optional additional restriction; plain: loopback default)")
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	listen := flags.String("listen", "127.0.0.1:8443", "literal IP:port to listen on")
+	flags.Var(&clients, "allow", "allowed client IP or CIDR; repeatable (default: any IP with pairing)")
 	portsFlag := flags.String("ports", "443", "comma-separated allowed destination ports")
 	dialTimeout := flags.Duration("dial-timeout", 10*time.Second, "DNS and connection establishment timeout")
 	maxTunnels := flags.Int("max-tunnels", 128, "maximum concurrent tunnels, including pending connections")
 	allowPrivate := flags.Bool("allow-private-destinations", false, "permit connections to private/local destination addresses")
-	var dir, advertise string
-	if encrypted {
-		flags.StringVar(&dir, "state-dir", defaultStateDir(), "private server configuration/identity directory")
-		flags.StringVar(&advertise, "advertise", "", "reachable hostname:port for invitations (default: listen address)")
-	}
+	dir := flags.String("state-dir", defaultStateDir(), "private server configuration/identity directory")
+	advertise := flags.String("advertise", "", "reachable hostname:port for invitations (default: listen address)")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
 	bind, err := netip.ParseAddrPort(*listen)
 	if err != nil || bind.Port() == 0 {
-		return errors.New("-listen must be a literal IP and nonzero port, e.g. 192.168.1.50:8888")
-	}
-	if !encrypted && !bind.Addr().IsLoopback() && len(clients) == 0 {
-		return errors.New("non-loopback plain listeners require an explicit -allow client IP/CIDR")
+		return errors.New("-listen must be a literal IP and nonzero port, e.g. 192.168.1.50:8443")
 	}
 	if *dialTimeout <= 0 || *maxTunnels < 1 || *maxTunnels > 65536 {
 		return errors.New("-dial-timeout must be positive and -max-tunnels must be 1–65536")
 	}
-	if encrypted && len(clients) == 0 {
-		// Cryptographic pairing is mandatory; the IP allowlist is additional.
-		clients = []string{"0.0.0.0/0", "::/0"}
+	if *advertise == "" {
+		*advertise = bind.String()
 	}
-	if encrypted {
-		if advertise == "" {
-			advertise = bind.String()
-		}
-		if err := validEndpoint(advertise); err != nil {
-			return err
-		}
+	if err := validEndpoint(*advertise); err != nil {
+		return err
 	}
 	allowed, err := parseAllow(clients)
 	if err != nil {
@@ -131,47 +111,40 @@ func runProxy(logger *slog.Logger, args []string, encrypted bool) error {
 		maxTunnels: *maxTunnels, allowPrivate: *allowPrivate,
 	}, logger)
 	defer proxy.Close()
-	server := &http.Server{
-		Handler: proxy, ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
-		BaseContext: func(net.Listener) context.Context { return ctx },
-	}
 	listener, err := net.Listen("tcp", bind.String())
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
-	if encrypted {
-		store, err := openStore(dir)
-		if err != nil {
-			return err
-		}
-		id, err := loadIdentity(store)
-		if err != nil {
-			return err
-		}
-		if err := store.initServer(advertise); err != nil {
-			return err
-		}
-		handler := &secureHandler{store: store, proxy: proxy}
-		server.Handler = handler
-		server.TLSConfig = id.serverTLS(store)
-		server.WriteTimeout = 15 * time.Second
-		// Hijacking requires outer HTTP/1.1. Inner HTTPS may still use HTTP/2.
-		server.Protocols = new(http.Protocols)
-		server.Protocols.SetHTTP1(true)
-		listener = tls.NewListener(&cappedListener{Listener: listener, slots: make(chan struct{}, *maxTunnels+32)}, server.TLSConfig)
-		watchCtx, cancelWatch := context.WithCancel(ctx)
-		watchDone := make(chan struct{})
-		go func() { defer close(watchDone); handler.watchRevocations(watchCtx) }()
-		defer func() { cancelWatch(); <-watchDone }()
-		logger.Info("TLS 1.3 with paired client identities enabled", "server_identity", id.fingerprint(), "advertise", advertise)
+	store, err := openStore(*dir)
+	if err != nil {
+		return err
 	}
+	id, err := loadIdentity(store)
+	if err != nil {
+		return err
+	}
+	if err := store.initServer(*advertise); err != nil {
+		return err
+	}
+	handler := &secureHandler{store: store, proxy: proxy}
+	server := &http.Server{
+		Handler: handler, TLSConfig: id.serverTLS(store),
+		ReadHeaderTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
+		IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10,
+		BaseContext: func(net.Listener) context.Context { return ctx },
+	}
+	// Hijacking requires outer HTTP/1.1. Inner HTTPS may still use HTTP/2.
+	server.Protocols = new(http.Protocols)
+	server.Protocols.SetHTTP1(true)
+	listener = tls.NewListener(&cappedListener{Listener: listener, slots: make(chan struct{}, *maxTunnels+32)}, server.TLSConfig)
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	go func() { defer close(watchDone); handler.watchRevocations(watchCtx) }()
+	defer func() { cancelWatch(); <-watchDone }()
+	logger.Info("TLS 1.3 with paired client identities enabled", "server_identity", id.fingerprint(), "advertise", *advertise)
 	logger.Info("listening", "address", listener.Addr(), "allowed_clients", allowed, "ports", *portsFlag)
 	logger.Info("outbound traffic follows host routing; configure your VPN and kill switch separately")
-	if !encrypted && !bind.Addr().IsLoopback() {
-		logger.Warn("plain HTTP proxy: use only on a trusted LAN; CONNECT destinations are not encrypted")
-	}
 	if *allowPrivate {
 		logger.Warn("private/local destinations are enabled")
 	}

@@ -96,7 +96,7 @@ It should be the VPN's public IP. Also perform the [per-client and kill-switch c
 
 ## Pairing and identity management
 
-State lives in `~/.config/vibemaxxer`, or `$XDG_CONFIG_HOME/vibemaxxer`. Every encrypted command accepts `-state-dir DIR`; use the **same directory for commands on one machine**, and a **separate directory for each role** if testing server and workstation on the same machine.
+State lives in `~/.config/vibemaxxer`, or `$XDG_CONFIG_HOME/vibemaxxer`. Every command accepts `-state-dir DIR`; use the **same directory for commands on one machine**, and a **separate directory for each role** if testing server and workstation on the same machine.
 
 - `identity.pem`: persistent Ed25519 private key, mode `0600`.
 - `server.json`: advertised address, paired client public-key fingerprints/names, and the hash/expiry of at most one enrollment token.
@@ -223,16 +223,15 @@ These checks are not proof that every possible connection is covered. For mandat
 | `bridge` | Workstation proxy; default `127.0.0.1:8888`, loopback binds only |
 | `clients list` | Show paired names and full public-key fingerprints |
 | `clients revoke NAME_OR_FULL_ID` | Remove a client's access |
-| `plain` | Original unencrypted HTTP CONNECT server |
 
-Encrypted commands accept `-state-dir DIR`. For `clients`, place flags **after the action and before the name**, for example `clients revoke -state-dir DIR workstation`.
+Running without a command prints help; flags require an explicit command. The VPN-host listener always requires paired TLS. Commands accept `-state-dir DIR`. For `clients`, place flags **after the action and before the name**, for example `clients revoke -state-dir DIR workstation`.
 
-Server flags (`serve` and `plain`):
+Server flags (`serve`):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-listen` | See commands above; plain: `127.0.0.1:8888` | Literal IPv4 or bracketed IPv6 address and port |
-| `-allow` | Serve: any IP **with pairing**; plain: loopback | Client IP/CIDR; repeatable; explicit values replace defaults |
+| `-listen` | `127.0.0.1:8443` | Literal IPv4 or bracketed IPv6 address and port |
+| `-allow` | Any IP **with pairing** | Client IP/CIDR; repeatable; explicit values replace defaults |
 | `-ports` | `443` | Allowed destination ports, comma-separated |
 | `-dial-timeout` | `10s` | DNS and destination TCP connection establishment timeout |
 | `-max-tunnels` | `128` | Concurrent tunnels, including pending destination dials (1–65536) |
@@ -243,31 +242,6 @@ Server flags (`serve` and `plain`):
 Private, loopback, link-local, unspecified, multicast, and shared CGNAT destinations are blocked by default. Actual DNS-resolved addresses are checked before connecting, including IPv4-mapped IPv6, preventing DNS rebinding around this policy. Only enable private destinations for intentional private-service access. Source allowlists use the TCP peer, never forwarded headers.
 
 An HTTP `405` usually means something sent ordinary HTTP instead of CONNECT; `403` can mean an unauthorized client, disallowed destination, or rejected enrollment. Connection resets at the bridge can indicate failed TLS authentication or an unavailable server; check bridge logs. Local HTTP model servers should normally be explicitly bypassed in the client; those connections then do not use the VPN proxy.
-
-## Legacy plain mode and SSH
-
-The original flags-only invocation still means **plain mode**, for compatibility. It is not automatically upgraded to TLS:
-
-```sh
-# VPN host; trusted LAN only. CONNECT destinations remain visible.
-./result/bin/vibemaxxer plain -listen 192.168.1.50:8888 -allow 192.168.1.20
-# Equivalent: ./result/bin/vibemaxxer -listen 192.168.1.50:8888 -allow 192.168.1.20
-```
-
-For this mode only, point both uppercase/lowercase proxy variables directly at `http://192.168.1.50:8888`. Non-loopback plain listeners require an explicit allowlist. HTTPS payloads remain encrypted end-to-end, but CONNECT metadata and usually the destination TLS hostname are visible on the LAN.
-
-Alternatively, keep `plain` on loopback and use SSH instead of the paired TLS bridge:
-
-```sh
-# VPN host:
-./result/bin/vibemaxxer plain
-
-# Workstation, separate terminal; do not also run the bridge on this port:
-ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-  -L 127.0.0.1:8888:127.0.0.1:8888 youruser@192.168.1.50
-```
-
-The agent environment remains the same local-proxy environment shown in Quick start.
 
 ## Security boundaries
 
