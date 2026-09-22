@@ -1,9 +1,9 @@
 # vibemaxxer
 
-A small HTTP CONNECT proxy for sending Claude Code's HTTPS traffic through a VPN running on another Linux machine. Written in Go, with no third-party Go dependencies. No root, system-wide installation, or SSH tunnel required on a trusted LAN.
+A small HTTP CONNECT proxy for sending coding agents' HTTPS traffic through a VPN running on another Linux machine. Works with **Claude Code, Codex, pi, OpenCode, and Cursor CLI**, subject to the client configuration and version caveats below. Written in Go, with no third-party Go dependencies. No root, system-wide installation, or SSH tunnel required on a trusted LAN.
 
 ```text
-Claude Code → LAN → vibemaxxer on your VPN host → VPN → Anthropic
+Coding agent → LAN → vibemaxxer on your VPN host → VPN → API provider
 ```
 
 vibemaxxer opens outbound TCP connections using the host's normal routing. It **does not establish or enforce the VPN**. Configure your VPN, DNS, and kill switch separately.
@@ -22,17 +22,24 @@ nix run . -- -listen 192.168.1.50:8888 -allow 192.168.1.20
 
 `nix run` builds and runs the program without installing it into a profile. The flake supports `x86_64-linux` and `aarch64-linux`. If flakes are not enabled, enable `nix-command` and `flakes` in your Nix configuration.
 
-On your **workstation**:
+On your **workstation**, set the proxy environment in the terminal where you will launch your agent:
 
 ```sh
-HTTP_PROXY=http://192.168.1.50:8888 \
-HTTPS_PROXY=http://192.168.1.50:8888 \
-claude
+export HTTP_PROXY=http://192.168.1.50:8888
+export HTTPS_PROXY="$HTTP_PROXY"
+export http_proxy="$HTTP_PROXY"
+export https_proxy="$HTTPS_PROXY"
+export NO_PROXY=localhost,127.0.0.1,::1
+export no_proxy="$NO_PROXY"
+
+claude  # Or codex, pi, opencode, or agent; see Client setup below.
 ```
 
-The `http://` proxy URL is intentional: HTTPS uses an HTTP CONNECT tunnel. TLS remains end-to-end between Claude Code and its destination; there is no TLS interception or custom CA.
+Both cases are set deliberately: clients differ in which casing takes precedence. These exports affect programs launched from this shell, not already-running agents or services. Review any existing proxy/bypass settings before replacing them.
 
-Check that existing `NO_PROXY` / `no_proxy` settings do not bypass the proxy for your API endpoints.
+The `http://` proxy URL is intentional: HTTPS uses an HTTP CONNECT tunnel. TLS remains end-to-end between the agent and its destination; there is no TLS interception or custom CA.
+
+Keep loopback in `NO_PROXY` / `no_proxy` so local services and callbacks connect directly, especially OpenCode's local HTTP service. Do not add API-provider domains or `*`: that would bypass the VPN proxy. See [Client setup](#client-setup) for service configuration and other caveats.
 
 Verify the exit address from your workstation:
 
@@ -64,6 +71,83 @@ nix fmt
 ```
 
 The checked-in `flake.lock` pins nixpkgs. Authenticate and clone the private repository first; local builds do not need a GitHub token in Nix configuration.
+
+## Client setup
+
+vibemaxxer is **provider- and client-independent**: it relays TCP bytes after CONNECT, without inspecting API paths, models, authentication, or payloads. No server-side mode or hostname list is needed for different agents. Default port `443` covers normal public HTTPS endpoints.
+
+HTTP/1.1, HTTP/2 (including gRPC), SSE streaming, and secure WebSockets (`wss://`) can all travel **inside** a CONNECT tunnel. The agent must actually use the proxy for its chosen transport; proxy support for HTTPS does not automatically imply proxy support for WebSockets. vibemaxxer does not accept HTTP/2 CONNECT on its plain HTTP listener, nor does it proxy UDP/QUIC.
+
+After applying the workstation exports above, launch the desired client:
+
+| Client | Command | Notes |
+| --- | --- | --- |
+| Claude Code | `claude` | Uses standard HTTP/HTTPS proxy variables. |
+| OpenAI Codex CLI | `codex` | Use a recent release with proxy-aware WebSocket transport; see below. |
+| pi | `pi` | Proxy variables configure its managed HTTP clients; provider/extension overrides can differ. |
+| OpenCode | `opencode` | Keep loopback bypasses; configure its managed service separately if used. |
+| Cursor CLI | `agent` | `cursor-agent` is also available with some installations. This is not the Cursor desktop editor. |
+
+Keep your existing provider credentials and API base URLs. **Do not set an API base URL to `http://192.168.1.50:8888`**: this is a forward proxy, not an OpenAI-compatible API gateway.
+
+### Codex
+
+Start `codex` from the configured shell. Recent Codex releases share proxy routing between HTTP and WebSocket clients; this is present in the [0.154.0 WebSocket client](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/websocket-client/src/lib.rs).
+
+**Older releases can bypass proxy variables for Responses WebSockets.** Upgrade rather than assuming a successful session means it is proxied. Verify a fresh model request as described below. Codex's sandbox/managed-network configuration is separate from the CLI's outbound model transport; these exports do not grant sandboxed tools network access or guarantee that every subprocess uses the VPN.
+
+### pi
+
+Start `pi` from the configured shell. Its [environment variables](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/environment-variables.md) include `HTTP_PROXY` and `HTTPS_PROXY`.
+
+Alternatively, recent pi versions offer a global `httpProxy` setting. **Merge**, rather than overwrite, this field in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "httpProxy": "http://192.168.1.50:8888"
+}
+```
+
+Keep the loopback bypass exports even when using this setting. Existing process proxy variables and provider-scoped settings can take precedence; avoid conflicting values. Custom providers and extensions can use their own network clients, so verify each provider/transport you rely on. If an older provider's WebSocket path does not honor the proxy, update pi or select `"transport": "sse"` in settings for providers that support it. See pi's [network and transport settings](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md).
+
+### OpenCode
+
+OpenCode uses local HTTP connections between the CLI and its service. **`NO_PROXY=localhost,127.0.0.1,::1` is required** when configuring the CLI proxy; sending these local requests to vibemaxxer will fail.
+
+For versions with a managed background service, shell exports alone do not reconfigure an already-running service. Persist its environment and start it with the new settings:
+
+```sh
+opencode service set env HTTP_PROXY http://192.168.1.50:8888
+opencode service set env HTTPS_PROXY http://192.168.1.50:8888
+opencode service set env http_proxy http://192.168.1.50:8888
+opencode service set env https_proxy http://192.168.1.50:8888
+opencode service set env NO_PROXY localhost,127.0.0.1,::1
+opencode service set env no_proxy localhost,127.0.0.1,::1
+opencode service start
+opencode
+```
+
+Setting a managed environment variable stops the running service; `service start` starts it again. These commands change OpenCode's persisted service configuration, not vibemaxxer. Keep the workstation exports in the CLI shell too. To remove persisted variables later, use `opencode service unset env VARIABLE` for each one and restart the service.
+
+Alternatively, `opencode --standalone` or `opencode serve` inherits the foreground process's environment. When attaching to an existing or remote server, configure the proxy **where that server runs**, not only on the attaching client. See [OpenCode network configuration](https://opencode.ai/docs/network/).
+
+### Cursor CLI
+
+Start `agent` (or `cursor-agent`) from the configured shell. Current Cursor CLI builds support `HTTPS_PROXY` for API connections, including HTTP/2 connections tunneled over CONNECT. No HTTP/2-disable flag or TLS interception is needed for vibemaxxer.
+
+Use an up-to-date CLI and verify its actual model traffic. Desktop editor proxy settings are not a substitute for the CLI's environment. Browser-based login, remote/cloud agents, MCP servers, and other subprocesses are separate network paths; a locally configured proxy does not relocate a remote agent's execution traffic.
+
+### Verify each client, not just curl
+
+The curl check above confirms proxy connectivity and the exit IP **for curl only**. For each CLI/provider you use:
+
+1. Restart the client (and any background service) with the proxy environment, then make a small model request. Watch vibemaxxer's logs for `tunnel opened` entries to that client's API destinations. Startup/update traffic alone does not prove model traffic is proxied.
+2. Stop vibemaxxer and repeat with a **fresh client connection and a new model request**. The request should fail, not silently switch to direct access. Use a fresh process to avoid cached results or a different service retaining old settings.
+3. With vibemaxxer running, disconnect the VPN and verify that its kill switch blocks fresh requests. Reconnect the VPN afterwards.
+
+These are practical checks, not proof that every possible connection is covered. If all traffic must be forced through the VPN, use routing/firewall enforcement rather than relying only on application proxy settings.
+
+Compatibility guidance is based on client documentation/source, not authenticated end-to-end testing of every CLI and provider. Recheck after client updates or transport changes. An HTTP `405` means something sent an ordinary HTTP proxy request; `403` can mean a disallowed client, port, or private destination. Local HTTP model servers should usually be added explicitly to your client's bypass list; they then connect directly and do not use the VPN proxy.
 
 ## Configuration
 
@@ -117,7 +201,12 @@ ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
   -L 127.0.0.1:8888:127.0.0.1:8888 youruser@192.168.1.50
 
 # Workstation:
-HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888 claude
+# Use the same Client setup instructions, with the proxy URL changed to
+# http://127.0.0.1:8888 in both uppercase and lowercase variables.
+export HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888
+export http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY"
+export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1
+claude  # Or codex, pi, opencode, or agent.
 ```
 
 ## Running in the background without a system-wide install
