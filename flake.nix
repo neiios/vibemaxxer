@@ -1,5 +1,5 @@
 {
-  description = "vibemaxxer — a small, access-controlled HTTP CONNECT proxy";
+  description = "vibemaxxer — paired TLS proxy for coding agents via a VPN host";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -22,7 +22,7 @@
           default = self.packages.${system}.vibemaxxer;
           vibemaxxer = pkgs.buildGoModule {
             pname = "vibemaxxer";
-            version = "0.1.0";
+            version = "0.2.0";
             src = pkgs.lib.cleanSource self;
             vendorHash = null;
             env.CGO_ENABLED = 0;
@@ -32,7 +32,7 @@
             ];
             doCheck = true;
             meta = {
-              description = "Access-controlled HTTP CONNECT proxy for a trusted LAN";
+              description = "HTTP CONNECT proxy with encrypted transport and one-time device pairing";
               homepage = "https://github.com/neiios/vibemaxxer";
               mainProgram = "vibemaxxer";
               platforms = systems;

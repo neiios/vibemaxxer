@@ -1,31 +1,77 @@
 # vibemaxxer
 
-A small HTTP CONNECT proxy for sending coding agents' HTTPS traffic through a VPN running on another Linux machine. Works with **Claude Code, Codex, pi, OpenCode, and Cursor CLI**, subject to the client configuration and version caveats below. Written in Go, with no third-party Go dependencies. No root, system-wide installation, or SSH tunnel required on a trusted LAN.
+Send **Claude Code, Codex, pi, OpenCode, and Cursor CLI** traffic through a VPN on another Linux machine, with **encrypted LAN transport and one-time device pairing**. Written in Go with no third-party Go dependencies. No root, system-wide installation, SSH tunnel, private CA, or manual certificate management required.
 
 ```text
-Coding agent → LAN → vibemaxxer on your VPN host → VPN → API provider
+Agent → local HTTP proxy (loopback only)
+      → TLS 1.3 across LAN → vibemaxxer on VPN host → VPN → API provider
 ```
 
-vibemaxxer opens outbound TCP connections using the host's normal routing. It **does not establish or enforce the VPN**. Configure your VPN, DNS, and kill switch separately.
+The agent's HTTPS remains end-to-end inside the outer TLS tunnel. LAN observers cannot read CONNECT destinations, API hostnames in the inner TLS handshake, prompts, responses, or API credentials. They can still see the proxy host's IP, traffic sizes/timing, and its outer TLS hostname if you connect by DNS name.
 
-## Quick start with Nix
+**vibemaxxer does not establish or enforce the VPN.** Outbound sockets follow the VPN host's routing. Configure VPN routing, DNS, firewall, and kill switch separately. Application proxy settings do not force every subprocess or connection through the VPN.
 
-Clone this private repository using your GitHub credentials **on the VPN host**:
+## Quick start: encrypted connection
+
+### 1. Get the program on both machines
+
+Clone this private repository using your GitHub credentials:
 
 ```sh
 gh repo clone neiios/vibemaxxer
 cd vibemaxxer
-
-# Substitute your VPN host's LAN IP and your workstation's LAN IP.
-nix run . -- -listen 192.168.1.50:8888 -allow 192.168.1.20
+nix build .
 ```
 
-`nix run` builds and runs the program without installing it into a profile. The flake supports `x86_64-linux` and `aarch64-linux`. If flakes are not enabled, enable `nix-command` and `flakes` in your Nix configuration.
+The commands below use `./result/bin/vibemaxxer`. Alternatively, run `nix run . -- COMMAND ...`, or build with Go as described below. Flakes support `x86_64-linux` and `aarch64-linux` and require Nix's `nix-command` and `flakes` features.
 
-On your **workstation**, set the proxy environment in the terminal where you will launch your agent:
+### 2. Start the VPN host
+
+Replace the address with that machine's LAN IP:
 
 ```sh
-export HTTP_PROXY=http://192.168.1.50:8888
+./result/bin/vibemaxxer serve -listen 192.168.1.50:8443
+```
+
+First startup automatically generates and saves the host's identity. Only paired clients can open tunnels. Optionally add `-allow 192.168.1.20` to restrict both pairing and proxy requests to your workstation's IP as an additional safeguard.
+
+In another terminal on the **VPN host**, generate an invitation:
+
+```sh
+./result/bin/vibemaxxer pair-code
+```
+
+It prints one `vibemaxxer-pair-v1:...` line. Copy it to the workstation through a **trusted channel**: physical access, an authenticated SSH session, or a secure messenger. Anyone who obtains the invitation before it is used can enroll their own device; replacing it in transit can redirect trust to another server.
+
+An invitation expires after **10 minutes**, works **once**, and is replaced by the next `pair-code`. Restarting `serve` cancels outstanding invitations but preserves paired clients. Never post an invitation in an issue, commit it, or paste it into a shell command.
+
+### 3. Pair the workstation
+
+On the **workstation**:
+
+```sh
+./result/bin/vibemaxxer pair -name workstation
+# Paste the invitation at the program's prompt, then press Enter.
+```
+
+The workstation generates its own identity, verifies the server's public-key fingerprint from the invitation, and registers its public key. Private keys stay on their respective machines. The server address and pinned key are saved automatically.
+
+### 4. Start the local bridge
+
+On the **workstation**:
+
+```sh
+./result/bin/vibemaxxer bridge
+```
+
+This listens on `127.0.0.1:8888`. It accepts connections only on loopback and forwards them to the paired host using mutually authenticated TLS. It never falls back to plaintext or direct API access if the server is unreachable or its identity changes.
+
+### 5. Configure your agent
+
+In the terminal where you launch the agent:
+
+```sh
+export HTTP_PROXY=http://127.0.0.1:8888
 export HTTPS_PROXY="$HTTP_PROXY"
 export http_proxy="$HTTP_PROXY"
 export https_proxy="$HTTPS_PROXY"
@@ -35,66 +81,79 @@ export no_proxy="$NO_PROXY"
 claude  # Or codex, pi, opencode, or agent; see Client setup below.
 ```
 
-Both cases are set deliberately: clients differ in which casing takes precedence. These exports affect programs launched from this shell, not already-running agents or services. Review any existing proxy/bypass settings before replacing them.
+The `http://` URL is intentional: this hop stays on your workstation. **The bridge encrypts everything sent across the LAN**, including the CONNECT exchange. Agents need no certificates, custom CA, API URL changes, or HTTPS-proxy support.
 
-The `http://` proxy URL is intentional: HTTPS uses an HTTP CONNECT tunnel. TLS remains end-to-end between the agent and its destination; there is no TLS interception or custom CA.
+Both environment-variable cases are set because clients differ in precedence. Review existing values before replacing them. Exports affect new processes, not already-running agents or services. Loopback bypasses keep local HTTP services and callbacks working; they do not bypass the bridge for external API destinations. Do not add provider domains or `*` to the bypass list.
 
-Keep loopback in `NO_PROXY` / `no_proxy` so local services and callbacks connect directly, especially OpenCode's local HTTP service. Do not add API-provider domains or `*`: that would bypass the VPN proxy. See [Client setup](#client-setup) for service configuration and other caveats.
-
-Verify the exit address from your workstation:
+Verify the VPN exit IP:
 
 ```sh
-curl --noproxy '' --proxy http://192.168.1.50:8888 https://api.ipify.org
+curl --noproxy '' --proxy http://127.0.0.1:8888 https://api.ipify.org
 echo
 ```
 
-This should print the VPN's public IP. Also test your kill switch: disconnecting the VPN should make a **fresh** proxied request fail, not reveal the VPN host's ordinary public IP.
+It should be the VPN's public IP. Also perform the [per-client and kill-switch checks](#verify-each-client-not-just-curl) below.
 
-### Build without Nix
+## Pairing and identity management
 
-Go 1.25 or newer:
+State lives in `~/.config/vibemaxxer`, or `$XDG_CONFIG_HOME/vibemaxxer`. Every encrypted command accepts `-state-dir DIR`; use the **same directory for commands on one machine**, and a **separate directory for each role** if testing server and workstation on the same machine.
+
+- `identity.pem`: persistent Ed25519 private key, mode `0600`.
+- `server.json`: advertised address, paired client public-key fingerprints/names, and the hash/expiry of at most one enrollment token.
+- `bridge.json`: paired server address and public-key fingerprint.
+- `.lock`: cross-process lock protecting state updates. Files are replaced atomically in a mode-`0700` directory.
+
+Existing state with group/world permissions or symlinked identity files is rejected. Keep this directory private, outside repositories and shared/synced folders. The running processes need to write it; no CA signing key exists.
+
+Certificates are generated automatically, valid for 90 days, and renewed on TLS handshakes when less than 30 days remain, using the same identity key. Trust is pinned to the **public key**, not a certificate's expiration date or a public CA. Certificate signatures, validity, usage, and TLS possession of the key are checked. Keep both machines' clocks reasonably accurate.
+
+### List and revoke clients
+
+On the VPN host:
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o vibemaxxer .
-./vibemaxxer -listen 192.168.1.50:8888 -allow 192.168.1.20
+./result/bin/vibemaxxer clients list
+./result/bin/vibemaxxer clients revoke workstation
+# A full identity fingerprint from 'clients list' can replace the name.
 ```
 
-The resulting binary can be copied to another Linux host of the same architecture. The VPN host does not need Go installed. To build for ARM64 from another architecture, add `GOOS=linux GOARCH=arm64` to the build command.
+Revocation blocks new CONNECT requests and closes active tunnels, normally within one second. Changes apply without restarting the server. If the server cannot read its authorization state, it denies new connections and closes active tunnels rather than retaining access.
 
-### Other Nix commands
+For another workstation, create a new invitation and pair with a different name. Names use 1–64 ASCII letters, digits, dots, underscores, or hyphens; the default is the workstation hostname.
 
-```sh
-nix build .                 # binary: ./result/bin/vibemaxxer
-nix flake check             # build and run tests
-nix develop                 # Go, gopls, and nixfmt
-nix fmt
-```
+### Change address, replace identities, or recover
 
-The checked-in `flake.lock` pins nixpkgs. Authenticate and clone the private repository first; local builds do not need a GitHub token in Nix configuration.
+- **Server LAN IP changed:** restart `serve` with the new address, generate an invitation, and run `pair -replace` on the workstation. Restart `bridge` afterwards. The identity key stays unchanged.
+- **DNS name or wildcard bind:** `serve -listen 0.0.0.0:8443 -advertise vpn-host.example:8443`. `-advertise` must be reachable from the workstation; wildcard addresses cannot appear in invitations. Binding a single LAN IP is preferred.
+- **Lost/reinstalled workstation:** revoke its old entry on the host, create an invitation, and pair the replacement. Revocation frees the old name.
+- **Lost or compromised identity key:** revoke the affected client, or stop the affected server. Use a new private state directory and pair again via a trusted channel. Missing keys in existing state are **not silently regenerated**. Replacing a server identity requires re-pairing every workstation.
+- **Backup:** a securely stored copy of the state directory preserves the identity and pairings. Treat backups as credentials. Do not copy one workstation's identity to another.
+
+`pair -replace` explicitly permits overwriting the workstation's saved server selection; it does not revoke the old registration on a previous server. Revoke that separately if no longer needed. Restart the bridge after pairing/configuration changes. Enrollment uses a direct pinned TLS connection, ignores proxy environment variables, and never follows redirects.
 
 ## Client setup
 
-vibemaxxer is **provider- and client-independent**: it relays TCP bytes after CONNECT, without inspecting API paths, models, authentication, or payloads. No server-side mode or hostname list is needed for different agents. Default port `443` covers normal public HTTPS endpoints.
+vibemaxxer is **provider- and client-independent**: it relays TCP bytes without inspecting API paths, models, authentication, or payloads. Default destination port `443` covers normal public HTTPS endpoints.
 
-HTTP/1.1, HTTP/2 (including gRPC), SSE streaming, and secure WebSockets (`wss://`) can all travel **inside** a CONNECT tunnel. The agent must actually use the proxy for its chosen transport; proxy support for HTTPS does not automatically imply proxy support for WebSockets. vibemaxxer does not accept HTTP/2 CONNECT on its plain HTTP listener, nor does it proxy UDP/QUIC.
+HTTP/1.1, HTTP/2 (including gRPC), SSE streaming, and secure WebSockets (`wss://`) work **inside** CONNECT. The agent must use the local proxy for its chosen transport: HTTPS proxy support does not automatically imply WebSocket proxy support. Outer CONNECT uses HTTP/1.1; UDP/QUIC is not supported.
 
-After applying the workstation exports above, launch the desired client:
+After applying the workstation exports above:
 
 | Client | Command | Notes |
 | --- | --- | --- |
 | Claude Code | `claude` | Uses standard HTTP/HTTPS proxy variables. |
-| OpenAI Codex CLI | `codex` | Use a recent release with proxy-aware WebSocket transport; see below. |
-| pi | `pi` | Proxy variables configure its managed HTTP clients; provider/extension overrides can differ. |
-| OpenCode | `opencode` | Keep loopback bypasses; configure its managed service separately if used. |
-| Cursor CLI | `agent` | `cursor-agent` is also available with some installations. This is not the Cursor desktop editor. |
+| OpenAI Codex CLI | `codex` | Use a release with proxy-aware WebSocket transport; see below. |
+| pi | `pi` | Its managed HTTP clients honor proxy settings; provider/extension overrides can differ. |
+| OpenCode | `opencode` | Keep loopback bypasses; configure its managed service separately. |
+| Cursor CLI | `agent` | `cursor-agent` is also available in some installations. This is not the desktop editor. |
 
-Keep your existing provider credentials and API base URLs. **Do not set an API base URL to `http://192.168.1.50:8888`**: this is a forward proxy, not an OpenAI-compatible API gateway.
+Keep existing provider credentials and API base URLs. **Do not point an API base URL at the bridge**: it is a forward proxy, not an OpenAI-compatible API gateway. Point agents at the **local bridge**, not directly at the encrypted server, which requires vibemaxxer's paired client identity.
 
 ### Codex
 
-Start `codex` from the configured shell. Recent Codex releases share proxy routing between HTTP and WebSocket clients; this is present in the [0.154.0 WebSocket client](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/websocket-client/src/lib.rs).
+Recent Codex releases share proxy routing between HTTP and WebSocket clients; this is present in the [0.154.0 WebSocket client](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/websocket-client/src/lib.rs).
 
-**Older releases can bypass proxy variables for Responses WebSockets.** Upgrade rather than assuming a successful session means it is proxied. Verify a fresh model request as described below. Codex's sandbox/managed-network configuration is separate from the CLI's outbound model transport; these exports do not grant sandboxed tools network access or guarantee that every subprocess uses the VPN.
+**Older releases can bypass proxy variables for Responses WebSockets.** Upgrade rather than assuming a successful session means it is proxied. Codex's sandbox/managed-network configuration is separate from outbound model transport; these exports do not grant sandboxed tools network access or guarantee every subprocess uses the VPN.
 
 ### pi
 
@@ -104,136 +163,174 @@ Alternatively, recent pi versions offer a global `httpProxy` setting. **Merge**,
 
 ```json
 {
-  "httpProxy": "http://192.168.1.50:8888"
+  "httpProxy": "http://127.0.0.1:8888"
 }
 ```
 
-Keep the loopback bypass exports even when using this setting. Existing process proxy variables and provider-scoped settings can take precedence; avoid conflicting values. Custom providers and extensions can use their own network clients, so verify each provider/transport you rely on. If an older provider's WebSocket path does not honor the proxy, update pi or select `"transport": "sse"` in settings for providers that support it. See pi's [network and transport settings](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md).
+Keep the loopback bypass exports. Existing process proxy variables and provider-scoped settings can take precedence; avoid conflicting values. Custom providers and extensions can use their own network clients. If an older provider's WebSocket path ignores the proxy, update pi or select `"transport": "sse"` for providers that support it. See pi's [settings](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md).
 
 ### OpenCode
 
-OpenCode uses local HTTP connections between the CLI and its service. **`NO_PROXY=localhost,127.0.0.1,::1` is required** when configuring the CLI proxy; sending these local requests to vibemaxxer will fail.
+OpenCode uses local HTTP connections between its CLI and service. **Keep `NO_PROXY=localhost,127.0.0.1,::1`**: routing local HTTP service requests through the bridge will fail.
 
-For versions with a managed background service, shell exports alone do not reconfigure an already-running service. Persist its environment and start it with the new settings:
+For versions with a managed background service, shell exports do not reconfigure an already-running service. Persist its environment on the workstation:
 
 ```sh
-opencode service set env HTTP_PROXY http://192.168.1.50:8888
-opencode service set env HTTPS_PROXY http://192.168.1.50:8888
-opencode service set env http_proxy http://192.168.1.50:8888
-opencode service set env https_proxy http://192.168.1.50:8888
+opencode service set env HTTP_PROXY http://127.0.0.1:8888
+opencode service set env HTTPS_PROXY http://127.0.0.1:8888
+opencode service set env http_proxy http://127.0.0.1:8888
+opencode service set env https_proxy http://127.0.0.1:8888
 opencode service set env NO_PROXY localhost,127.0.0.1,::1
 opencode service set env no_proxy localhost,127.0.0.1,::1
 opencode service start
 opencode
 ```
 
-Setting a managed environment variable stops the running service; `service start` starts it again. These commands change OpenCode's persisted service configuration, not vibemaxxer. Keep the workstation exports in the CLI shell too. To remove persisted variables later, use `opencode service unset env VARIABLE` for each one and restart the service.
+Setting a managed environment variable stops the service; `service start` restarts it. Keep the workstation exports in the CLI shell too. Remove persisted variables later with `opencode service unset env VARIABLE` for each one, then restart the service.
 
-Alternatively, `opencode --standalone` or `opencode serve` inherits the foreground process's environment. When attaching to an existing or remote server, configure the proxy **where that server runs**, not only on the attaching client. See [OpenCode network configuration](https://opencode.ai/docs/network/).
+Alternatively, `opencode --standalone` or `opencode serve` inherits its foreground environment. When attaching to an existing/remote server, run the bridge and configure proxy variables **where that server runs**, not only on the attaching client. See [OpenCode network configuration](https://opencode.ai/docs/network/).
 
 ### Cursor CLI
 
-Start `agent` (or `cursor-agent`) from the configured shell. Current Cursor CLI builds support `HTTPS_PROXY` for API connections, including HTTP/2 connections tunneled over CONNECT. No HTTP/2-disable flag or TLS interception is needed for vibemaxxer.
+Start `agent` (or `cursor-agent`) from the configured shell. Current Cursor CLI builds support `HTTPS_PROXY` for API connections, including HTTP/2 tunneled over CONNECT. No HTTP/2-disable flag or TLS interception is needed.
 
-Use an up-to-date CLI and verify its actual model traffic. Desktop editor proxy settings are not a substitute for the CLI's environment. Browser-based login, remote/cloud agents, MCP servers, and other subprocesses are separate network paths; a locally configured proxy does not relocate a remote agent's execution traffic.
+Use an up-to-date CLI and verify actual model traffic. Desktop editor proxy settings do not configure the CLI. Browser login, remote/cloud agents, and MCP servers are separate network paths; a local proxy does not relocate remote execution traffic.
 
 ### Verify each client, not just curl
 
-The curl check above confirms proxy connectivity and the exit IP **for curl only**. For each CLI/provider you use:
+The curl check confirms connectivity and the exit IP **for curl only**. For each CLI/provider:
 
-1. Restart the client (and any background service) with the proxy environment, then make a small model request. Watch vibemaxxer's logs for `tunnel opened` entries to that client's API destinations. Startup/update traffic alone does not prove model traffic is proxied.
-2. Stop vibemaxxer and repeat with a **fresh client connection and a new model request**. The request should fail, not silently switch to direct access. Use a fresh process to avoid cached results or a different service retaining old settings.
-3. With vibemaxxer running, disconnect the VPN and verify that its kill switch blocks fresh requests. Reconnect the VPN afterwards.
+1. Restart the client and any service with the proxy environment, then make a small model request. Watch the VPN host's `tunnel opened` logs for the expected API destinations. Startup/update traffic alone proves nothing about model traffic.
+2. Stop the bridge or VPN-host server and repeat with a **fresh client connection and a new request**. It should fail, not silently connect directly. Avoid cached results and services retaining old settings.
+3. With both vibemaxxer processes running, disconnect the VPN. A fresh proxied request must fail because of the host's kill switch, not reveal its ordinary public IP. Reconnect the VPN afterwards.
 
-These are practical checks, not proof that every possible connection is covered. If all traffic must be forced through the VPN, use routing/firewall enforcement rather than relying only on application proxy settings.
+These checks are not proof that every possible connection is covered. For mandatory VPN routing, use firewall/routing enforcement in addition to application settings. Client guidance is based on documentation/source, not authenticated end-to-end testing of every CLI/provider; recheck after updates.
 
-Compatibility guidance is based on client documentation/source, not authenticated end-to-end testing of every CLI and provider. Recheck after client updates or transport changes. An HTTP `405` means something sent an ordinary HTTP proxy request; `403` can mean a disallowed client, port, or private destination. Local HTTP model servers should usually be added explicitly to your client's bypass list; they then connect directly and do not use the VPN proxy.
+## Commands and configuration
 
-## Configuration
+```sh
+./result/bin/vibemaxxer help
+./result/bin/vibemaxxer serve -help
+./result/bin/vibemaxxer bridge -help
+./result/bin/vibemaxxer pair -help
+```
 
-Run `vibemaxxer -help` for flags:
+| Command | Purpose |
+| --- | --- |
+| `serve` | TLS 1.3 CONNECT server; default `127.0.0.1:8443` |
+| `pair-code` | Single-use invitation; optional `-ttl 10m` (1m–1h) |
+| `pair` | Read invitation from stdin; optional `-name`, `-replace` |
+| `bridge` | Workstation proxy; default `127.0.0.1:8888`, loopback binds only |
+| `clients list` | Show paired names and full public-key fingerprints |
+| `clients revoke NAME_OR_FULL_ID` | Remove a client's access |
+| `plain` | Original unencrypted HTTP CONNECT server |
+
+Encrypted commands accept `-state-dir DIR`. For `clients`, place flags **after the action and before the name**, for example `clients revoke -state-dir DIR workstation`.
+
+Server flags (`serve` and `plain`):
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `-listen` | `127.0.0.1:8888` | Literal IPv4 or bracketed IPv6 address and port |
-| `-allow` | Loopback IPv4/IPv6 | Allowed client IP or CIDR; repeatable |
-| `-ports` | `443` | Comma-separated allowed destination ports |
-| `-dial-timeout` | `10s` | DNS and TCP connection establishment timeout |
-| `-max-tunnels` | `128` | Maximum simultaneous tunnels, including pending dials |
-| `-allow-private-destinations` | `false` | Permit private/local destination IPs |
+| `-listen` | See commands above; plain: `127.0.0.1:8888` | Literal IPv4 or bracketed IPv6 address and port |
+| `-allow` | Serve: any IP **with pairing**; plain: loopback | Client IP/CIDR; repeatable; explicit values replace defaults |
+| `-ports` | `443` | Allowed destination ports, comma-separated |
+| `-dial-timeout` | `10s` | DNS and destination TCP connection establishment timeout |
+| `-max-tunnels` | `128` | Concurrent tunnels, including pending destination dials (1–65536) |
+| `-allow-private-destinations` | `false` | Permit private/local destination addresses |
 
-Explicit `-allow` flags **replace** the loopback defaults. A non-loopback listener requires an explicit allowlist. Source addresses come from the TCP connection, never forwarded headers.
+`serve` additionally accepts `-advertise HOST:PORT`. Its total accepted connection limit is `max-tunnels + 32`, including TLS handshakes and pairing requests. Headers, pairing bodies, and TLS handshakes have deadlines; tunneled streams have no idle deadline. `bridge` accepts `-listen`, `-dial-timeout` (including upstream TLS handshake), and `-max-tunnels` (including pending handshakes).
+
+Private, loopback, link-local, unspecified, multicast, and shared CGNAT destinations are blocked by default. Actual DNS-resolved addresses are checked before connecting, including IPv4-mapped IPv6, preventing DNS rebinding around this policy. Only enable private destinations for intentional private-service access. Source allowlists use the TCP peer, never forwarded headers.
+
+An HTTP `405` usually means something sent ordinary HTTP instead of CONNECT; `403` can mean an unauthorized client, disallowed destination, or rejected enrollment. Connection resets at the bridge can indicate failed TLS authentication or an unavailable server; check bridge logs. Local HTTP model servers should normally be explicitly bypassed in the client; those connections then do not use the VPN proxy.
+
+## Legacy plain mode and SSH
+
+The original flags-only invocation still means **plain mode**, for compatibility. It is not automatically upgraded to TLS:
 
 ```sh
-# Two workstations; prefer individual IPs over a whole subnet.
-vibemaxxer -listen 192.168.1.50:8888 \
-  -allow 192.168.1.20 -allow 192.168.1.21
-
-# A whole trusted subnet (broader access).
-vibemaxxer -listen 192.168.1.50:8888 -allow 192.168.1.0/24
-
-# IPv6 listener and client.
-vibemaxxer -listen '[fd00::50]:8888' -allow fd00::20
+# VPN host; trusted LAN only. CONNECT destinations remain visible.
+./result/bin/vibemaxxer plain -listen 192.168.1.50:8888 -allow 192.168.1.20
+# Equivalent: ./result/bin/vibemaxxer -listen 192.168.1.50:8888 -allow 192.168.1.20
 ```
 
-Private, loopback, link-local, unspecified, multicast, and shared CGNAT **destination** addresses are blocked by default. This also applies to hostnames resolving to those addresses and to IPv4-mapped IPv6 addresses. Actual resolved addresses are checked before connecting, preventing DNS rebinding around this policy. Client addresses can still be private, as expected for LAN use. Only enable `-allow-private-destinations` for intentional access to private services.
+For this mode only, point both uppercase/lowercase proxy variables directly at `http://192.168.1.50:8888`. Non-loopback plain listeners require an explicit allowlist. HTTPS payloads remain encrypted end-to-end, but CONNECT metadata and usually the destination TLS hostname are visible on the LAN.
 
-## Security and networking
-
-- **Trusted LAN only.** The listener is plain HTTP with IP-based access control, not user authentication. HTTPS payloads—including prompts, responses, and API credentials—remain TLS-encrypted. CONNECT hostnames and ports are visible on the LAN. There is no HTTPS-proxy listener or proxy-password support.
-- **Use a host firewall as defense in depth.** Permit the listen port only from your workstation's IP. Do not port-forward it from the internet. Binding a LAN IP alone does not restrict client access. IP allowlisting is not strong identity protection on a hostile network.
-- **Keep the VPN kill switch enabled.** If the VPN goes down, host routing might otherwise fall back to ordinary internet access. The proxy cannot detect whether an outbound connection is using your intended VPN.
-- **Check split tunneling.** The proxy process must be included in VPN routing. Permit incoming LAN connections and their replies in the VPN/firewall rules.
-- **DNS happens on the proxy host** for hostname-based CONNECT requests. Configure that host's resolver to use the VPN as well.
-- **CONNECT-only, not a general gateway.** Ordinary HTTP requests receive `405`. SOCKS is not supported. Port restrictions do not verify that tunneled bytes are TLS; trusted clients can send arbitrary TCP traffic to allowed destinations/ports.
-- **Not all child processes honor proxy variables.** Browser login flows, MCP servers, shell commands, and other tools may need separate configuration. This is not whole-machine VPN routing.
-- **Long-running streams are supported.** Headers and connection setup have timeouts; established tunnels deliberately have no overall or idle deadline. A finite tunnel limit bounds concurrent outbound connections.
-- **Logs contain client addresses, destination hostnames, errors, and tunnel durations**, not payloads, prompts, API headers, or credentials. Treat destination metadata as sensitive.
-
-For an untrusted network, keep the listener on loopback and add SSH:
+Alternatively, keep `plain` on loopback and use SSH instead of the paired TLS bridge:
 
 ```sh
 # VPN host:
-vibemaxxer
+./result/bin/vibemaxxer plain
 
-# Workstation, separate terminal:
+# Workstation, separate terminal; do not also run the bridge on this port:
 ssh -NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
   -L 127.0.0.1:8888:127.0.0.1:8888 youruser@192.168.1.50
-
-# Workstation:
-# Use the same Client setup instructions, with the proxy URL changed to
-# http://127.0.0.1:8888 in both uppercase and lowercase variables.
-export HTTP_PROXY=http://127.0.0.1:8888 HTTPS_PROXY=http://127.0.0.1:8888
-export http_proxy="$HTTP_PROXY" https_proxy="$HTTPS_PROXY"
-export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1
-claude  # Or codex, pi, opencode, or agent.
 ```
 
-## Running in the background without a system-wide install
+The agent environment remains the same local-proxy environment shown in Quick start.
 
-Keep it in a terminal or `tmux`, or build it and start a transient systemd **user** service on the VPN host:
+## Security boundaries
+
+- **Use a host firewall too.** Prefer binding the VPN host's LAN IP and allowing incoming connections only from your workstations. Avoid exposing the listener to the internet. Pairing is cryptographic identity; an IP allowlist alone is not.
+- **Protect the local bridge.** Any process/user able to connect to your workstation's loopback port can use its paired identity. It is not per-process authorization, and loopback traffic is not encrypted. Local root or a compromised workstation is outside this protection.
+- **No TLS interception.** The VPN host sees destinations and encrypted API connections, not API payloads. It can still deny or redirect traffic; agents must continue validating API server certificates normally.
+- **Keep the VPN kill switch enabled.** The proxy cannot detect whether outbound sockets are using your intended VPN. Configure split tunneling to include the proxy and permit LAN connections/replies.
+- **DNS for CONNECT destinations runs on the VPN host.** Configure that resolver to use the VPN. The workstation may resolve the proxy's own advertised DNS name; client code that ignores proxy settings may also perform local DNS/network requests.
+- **CONNECT-only, not a general gateway.** Ordinary HTTP gets `405`; SOCKS and UDP are unsupported. Trusted clients can tunnel arbitrary TCP bytes to allowed destinations/ports; port restrictions do not verify that those bytes are TLS.
+- **Subprocesses can bypass application proxies.** Browser login, MCP servers, shell commands, custom extensions, and remote agents may need separate configuration or network enforcement.
+- **Logs contain metadata, not secrets:** client IPs, pairing names/public fingerprints, destinations, errors, and durations. Invitations are printed only by `pair-code`; enrollment tokens, private keys, prompts, and API headers are not logged. Treat destination metadata as sensitive.
+
+TLS uses Go's standard implementation, with pinned Ed25519 identities and SHA-256 public-key fingerprints. This is not a bespoke encryption protocol. Custom pin verification replaces Web PKI hostname/CA trust only for the outer connection; it does not disable peer authentication. No external security audit has been performed.
+
+## Build and run without system-wide installation
+
+With Go 1.25 or newer:
 
 ```sh
-nix build .
-systemd-run --user --unit=vibemaxxer --property=Restart=on-failure \
-  "$(readlink -f result)/bin/vibemaxxer" \
-  -listen 192.168.1.50:8888 -allow 192.168.1.20
-
-journalctl --user -u vibemaxxer -f
-systemctl --user stop vibemaxxer
+CGO_ENABLED=0 go build -trimpath -o vibemaxxer .
+./vibemaxxer serve -listen 192.168.1.50:8443
 ```
 
-This is not boot persistence: the transient unit is not installed, and keeping user services alive after logout may require user lingering. Keep the `result` symlink as a Nix GC root while using that build.
+Copy the binary to another Linux host of the same architecture; that host does not need Go. Add `GOOS=linux GOARCH=arm64` to cross-build for ARM64. State locking uses Linux/Unix file locks; the supported deployment platforms are Linux.
 
-SIGINT and SIGTERM stop the server, cancel pending dials, and close active CONNECT tunnels. `http.Server.Shutdown` alone would not close hijacked connections; vibemaxxer tracks those explicitly.
+Other Nix commands:
+
+```sh
+nix run . -- help
+nix flake check
+nix develop
+nix fmt
+```
+
+The checked-in `flake.lock` pins nixpkgs. Authenticate and clone the private repository first; local builds need no GitHub token in Nix configuration.
+
+### Background services
+
+Keep the two processes in terminals/`tmux`, or run transient systemd **user** services. Pairing commands must run as the same user with the same state directory as the relevant service.
+
+```sh
+# VPN host, from its clone after nix build:
+systemd-run --user --unit=vibemaxxer-server --property=Restart=on-failure \
+  "$(readlink -f result)/bin/vibemaxxer" serve -listen 192.168.1.50:8443
+journalctl --user -u vibemaxxer-server -f
+
+# Workstation, from its clone after pairing and nix build:
+systemd-run --user --unit=vibemaxxer-bridge --property=Restart=on-failure \
+  "$(readlink -f result)/bin/vibemaxxer" bridge
+journalctl --user -u vibemaxxer-bridge -f
+```
+
+These are not boot-persistent units. Keeping user services alive after logout may require user lingering. Keep the `result` symlink as a Nix GC root while using that build. Stop with `systemctl --user stop vibemaxxer-server` or `vibemaxxer-bridge` on the corresponding host.
+
+SIGINT/SIGTERM cancel pending dials and close active tunnels. The bridge joins its forwarding goroutines before exiting. The server explicitly closes hijacked CONNECT connections, which `http.Server.Shutdown` alone would leave open.
 
 ## Development
 
 ```sh
-nix develop  # optional if Go is already installed
+nix develop  # optional if Go is installed
 gofmt -w *.go
 go vet ./...
 go test -race -count=1 -timeout=60s ./...
 ```
 
-Tests use local servers, not the internet. They cover client allowlists, destination filtering (including resolved hostnames), request validation, end-to-end verified TLS, streaming, buffered CONNECT data, TCP half-close, overload, failed connections, and shutdown. GitHub Actions also builds and tests the Nix package.
+Tests use local servers, not the internet. They cover the original allowlists, resolved-destination filtering, CONNECT parsing, streaming, buffered data, half-close, limits, dial failures, and shutdown; plus pairing/replay/expiry/concurrent token consumption, private state, pinned identities, certificate renewal, authentication failures, active revocation, fail-closed behavior, HTTP/2, and WebSocket upgrade/frame transport through the encrypted bridge. A raw TCP capture check verifies that test destinations, enrollment tokens, and payloads are absent from the simulated LAN stream. CI also builds and tests the Nix package.
