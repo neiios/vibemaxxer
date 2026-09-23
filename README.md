@@ -171,6 +171,19 @@ After applying the workstation exports above:
 
 Keep existing provider credentials and API base URLs. **Do not point an API base URL at the bridge**: it is a forward proxy, not an OpenAI-compatible API gateway. Point agents at the **local bridge**, not directly at the encrypted server, which requires vibemaxxer's paired client identity.
 
+### Claude Code: OAuth token and first run
+
+If you use a token from `claude setup-token`, export `CLAUDE_CODE_OAUTH_TOKEN` **in the environment of the `claude` process**. A shell assignment without `export` is not enough; running a wrapper script does not export its variables back into the calling shell. Keep tokens out of repositories and check `claude auth status` from the same environment you use to launch Claude Code. Status reporting OAuth authentication does not by itself test a model request or prove the token is still valid.
+
+On a fresh Claude Code installation, the interactive CLI may still show **“Select login method”** even when `claude auth status` reports `loggedIn: true` with `authMethod: oauth_token`. In Claude Code 2.1.280, this can happen when the default `~/.claude.json` lacks `hasCompletedOnboarding`. If you have a valid token and deliberately want to skip the first-run login screen, set that flag (requires `jq`):
+
+```sh
+tmp=$(mktemp "$HOME/.claude.json.XXXXXX")
+jq '.hasCompletedOnboarding = true' "$HOME/.claude.json" > "$tmp" && mv "$tmp" "$HOME/.claude.json"
+```
+
+This edits Claude Code's own first-run state, not vibemaxxer's configuration; its behavior may change across Claude Code versions. If you use a custom Claude configuration directory, locate the corresponding config file first. Restart Claude Code and make a small model request to confirm the token actually works. If authentication then fails, check or regenerate the token separately; changing the onboarding flag does not fix an invalid token.
+
 ### Codex
 
 Recent Codex releases share proxy routing between HTTP and WebSocket clients; this is present in the [0.154.0 WebSocket client](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/websocket-client/src/lib.rs).
