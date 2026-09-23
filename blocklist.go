@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-type domainBlocklist map[string]bool
+type domainRules map[string]bool
+
+// Keep the blocklist name for existing callers.
+type domainBlocklist = domainRules
 
 func normalizeDomain(name string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
@@ -20,6 +23,10 @@ func validDomainRule(name string) bool {
 }
 
 func loadBlocklist(path string) (domainBlocklist, error) {
+	return loadDomainRules(path)
+}
+
+func loadDomainRules(path string) (domainRules, error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -28,7 +35,7 @@ func loadBlocklist(path string) (domainBlocklist, error) {
 		return nil, err
 	}
 	defer file.Close()
-	list := make(domainBlocklist)
+	list := make(domainRules)
 	scanner := bufio.NewScanner(file)
 	for line := 1; scanner.Scan(); line++ {
 		text := strings.TrimSpace(scanner.Text())
@@ -44,7 +51,7 @@ func loadBlocklist(path string) (domainBlocklist, error) {
 	return list, scanner.Err()
 }
 
-func (list domainBlocklist) match(host string) string {
+func (list domainRules) match(host string) string {
 	host = normalizeDomain(host)
 	for host != "" {
 		if list[host] {

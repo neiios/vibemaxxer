@@ -16,10 +16,12 @@ import (
 )
 
 type bridge struct {
-	server    string
-	tlsConfig *tls.Config
-	blocklist domainBlocklist
-	logger    *slog.Logger
+	server       string
+	tlsConfig    *tls.Config
+	blocklist    domainBlocklist
+	proxyDomains domainRules // nil proxies everything; empty routes everything directly
+	direct       *proxy      // reuses destination dialing safeguards; never serves HTTP
+	logger       *slog.Logger
 }
 
 func (b *bridge) dial() (net.Conn, error) {
@@ -78,6 +80,48 @@ func respond(conn net.Conn, status int, message string) {
 		status, http.StatusText(status), len(message)+1, message)
 }
 
+func (b *bridge) routeDirect(host string) bool {
+	if b.proxyDomains == nil {
+		return false
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	return b.proxyDomains.match(host) == ""
+}
+
+func (b *bridge) forwardDirect(local net.Conn, reader *bufio.Reader, target string, port int) {
+	b.logger.Info("routing connection", "target", target, "route", "direct")
+	direct := b.direct
+	if direct == nil {
+		direct = &proxy{ports: map[int]bool{443: true}}
+	}
+	if !direct.ports[port] {
+		respond(local, http.StatusForbidden, "direct destination port not allowed")
+		return
+	}
+	upstream, err := direct.dial(context.Background(), target)
+	if err != nil {
+		status := http.StatusBadGateway
+		var netErr net.Error
+		if errors.Is(err, errPrivateDestination) {
+			status = http.StatusForbidden
+		} else if errors.As(err, &netErr) && netErr.Timeout() {
+			status = http.StatusGatewayTimeout
+		}
+		b.logger.Warn("direct connection failed", "target", target, "route", "direct", "error", err)
+		respond(local, status, http.StatusText(status))
+		return
+	}
+	defer upstream.Close()
+	_ = local.SetWriteDeadline(time.Now().Add(headerTimeout))
+	if _, err := io.WriteString(local, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	_ = local.SetWriteDeadline(time.Time{})
+	pipe(local, reader, upstream, upstream)
+}
+
 func (b *bridge) forward(local net.Conn) {
 	defer local.Close()
 	_ = local.SetReadDeadline(time.Now().Add(headerTimeout))
@@ -105,6 +149,11 @@ func (b *bridge) forward(local net.Conn) {
 		}
 	}
 	_ = local.SetReadDeadline(time.Time{})
+	if b.routeDirect(host) {
+		b.forwardDirect(local, reader, target, port)
+		return
+	}
+	b.logger.Info("routing connection", "target", target, "route", "server")
 	upstream, err := b.dial()
 	if err != nil {
 		b.logger.Warn("encrypted upstream unavailable; no direct fallback", "target", target, "error", err)

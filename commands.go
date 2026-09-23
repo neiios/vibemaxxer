@@ -110,6 +110,8 @@ func runBridge(logger *slog.Logger, args []string) error {
 	serverKey := flags.String("server-key", "", "fingerprint printed by 'vibemaxxer key' on the VPN host (required)")
 	listen := flags.String("listen", "127.0.0.1:8888", "loopback IP:PORT for agents")
 	blocklistPath := flags.String("blocklist", "", "file of domains to refuse, one per line, including subdomains")
+	proxyDomainsPath := flags.String("proxy-domains", "", "file of domains to route through the server; all others connect directly")
+	directPortsFlag := flags.String("direct-ports", "443", "comma-separated allowed destination ports for direct routes")
 	keyPath := keyFlag(flags)
 	if err := parseNoArgs(flags, args); err != nil {
 		return err
@@ -125,6 +127,14 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil || !bind.Addr().IsLoopback() || bind.Port() == 0 {
 		return errors.New("-listen must be a loopback IP:PORT such as 127.0.0.1:8888")
 	}
+	proxyDomains, err := loadDomainRules(*proxyDomainsPath)
+	if err != nil {
+		return fmt.Errorf("-proxy-domains: %w", err)
+	}
+	directPorts, err := parsePorts(*directPortsFlag)
+	if err != nil {
+		return fmt.Errorf("-direct-ports: %w", err)
+	}
 	blocklist, err := loadBlocklist(*blocklistPath)
 	if err != nil {
 		return err
@@ -137,7 +147,8 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	b := &bridge{server: *server, tlsConfig: id.clientTLS(key), blocklist: blocklist, logger: logger}
+	b := &bridge{server: *server, tlsConfig: id.clientTLS(key), blocklist: blocklist,
+		proxyDomains: proxyDomains, direct: newProxy(directPorts, logger), logger: logger}
 	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.fingerprint(), "server", *server, "blocklist_rules", len(blocklist))
 	b.probe()
 	return b.serve(listener)

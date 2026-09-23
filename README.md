@@ -51,6 +51,20 @@ vibemaxxer bridge -server ... -server-key ... -blocklist blocked-domains.txt
 
 One domain per line, `#` comments allowed. A rule covers its subdomains. Blocked CONNECTs get `403` from the bridge without contacting the server. IP literals are not matched. The file is read at startup.
 
+### Selective routing
+
+```sh
+vibemaxxer bridge -server ... -server-key ... -proxy-domains proxy-domains.txt
+```
+
+The file uses the same format as the blocklist (one ASCII/punycode domain per line, including subdomains, case-insensitive, `#` comments). Matching CONNECT destinations go through the server; everything else connects directly from the workstation through the local bridge. IP literals use the direct route. DNS resolution happens on the server for server routes and locally for direct routes.
+
+Omitting `-proxy-domains` preserves proxy-all behavior. An empty file routes everything directly; invalid or unreadable files fail startup. Files are read at startup. The blocklist takes precedence over both routes. Server failures never cause matching domains to fall back to direct connections.
+
+Direct routes allow only port 443 by default; use `-direct-ports 443,8443` to change this. They retain the private/local destination protections, timeouts, and shared bridge connection limit. The server's `-ports` setting independently controls server routes. Logs identify `route=direct` or `route=server`.
+
+Applications still use the local bridge for both routes; this does not add support for plain HTTP requests (only CONNECT is supported). Existing `NO_PROXY` entries are preserved by `run` and can bypass the bridge and its routing/blocklist rules. With selective routing, stopping the server should break matching destinations while direct destinations remain available.
+
 ## Reference
 
 | Command | Purpose |
@@ -70,6 +84,8 @@ One domain per line, `#` comments allowed. A rule covers its subdomains. Blocked
 | `-server-key` | bridge | required | VPN host fingerprint |
 | `-listen` | bridge | `127.0.0.1:8888` | Loopback `IP:PORT` |
 | `-blocklist` | bridge | none | Domain blocklist file |
+| `-proxy-domains` | bridge | none (proxy all) | Route only these domains through the server |
+| `-direct-ports` | bridge | `443` | Allowed destination ports for direct routes |
 | `-bridge` | run | `127.0.0.1:8888` | Bridge address |
 
 Fixed: 10-second dial and header timeouts, 256 tunnels per process. Private, loopback, link-local, and CGNAT destinations are refused after DNS resolution, so a tunnel cannot reach the VPN host's LAN.
