@@ -19,9 +19,6 @@ import (
 	"time"
 )
 
-// identity is a machine's persistent Ed25519 key. Trust is pinned to the
-// SHA-256 fingerprint of the public key; the certificate is only the container
-// TLS requires and nothing about it is trusted.
 type identity struct {
 	key  ed25519.PrivateKey
 	cert tls.Certificate
@@ -35,7 +32,6 @@ func defaultKeyPath() string {
 	return filepath.Join(dir, "vibemaxxer", "identity.pem")
 }
 
-// loadIdentity reads the key at path, generating it on first use.
 func loadIdentity(path string) (*identity, error) {
 	if path == "" {
 		return nil, errors.New("cannot determine the configuration directory; pass -key FILE")
@@ -86,7 +82,6 @@ func generateKey(path string) (ed25519.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	// O_EXCL never overwrites an identity that appeared concurrently.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, os.ErrExist) {
 		return readKey(path)
@@ -132,7 +127,6 @@ func (id *identity) fingerprint() string {
 	return fingerprint(id.key.Public().(ed25519.PublicKey))
 }
 
-// parseFingerprint normalizes a user-supplied fingerprint.
 func parseFingerprint(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	decoded, err := hex.DecodeString(value)
@@ -142,8 +136,6 @@ func parseFingerprint(value string) (string, error) {
 	return value, nil
 }
 
-// peerFingerprint identifies the authenticated peer. TLS 1.3 has already proven
-// possession of the presented key, so only the key itself matters.
 func peerFingerprint(state tls.ConnectionState) (string, error) {
 	if len(state.PeerCertificates) != 1 {
 		return "", errors.New("peer must present exactly one identity certificate")
@@ -155,8 +147,6 @@ func peerFingerprint(state tls.ConnectionState) (string, error) {
 	return fingerprint(pub), nil
 }
 
-// clientTLS pins the server to one fingerprint. InsecureSkipVerify only
-// disables Web PKI; VerifyConnection replaces it with the pin.
 func (id *identity) clientTLS(serverKey string) *tls.Config {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -175,8 +165,6 @@ func (id *identity) clientTLS(serverKey string) *tls.Config {
 	}
 }
 
-// serverTLS admits only the listed client fingerprints. Unknown clients fail
-// the handshake and are logged with the key to add.
 func (id *identity) serverTLS(clients map[string]bool) *tls.Config {
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS13,

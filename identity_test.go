@@ -63,22 +63,18 @@ func TestMutualPinning(t *testing.T) {
 	logger, logs := testLogger()
 	address := startServer(t, server, map[string]bool{client.fingerprint(): true}, map[int]bool{443: true}, false, logger)
 
-	// Correct pins on both sides: the request reaches the HTTP layer.
 	_, _, status := connect(t, address, client.clientTLS(server.fingerprint()), "GET / HTTP/1.1\r\nHost: x\r\n\r\n", "")
 	if status != http.StatusMethodNotAllowed {
 		t.Fatalf("authenticated GET status %d", status)
 	}
 
-	// Wrong server pin: the client aborts and names the presented key.
 	_, err := tls.Dial("tcp", address, client.clientTLS(stranger.fingerprint()))
 	if err == nil || !strings.Contains(err.Error(), server.fingerprint()) {
 		t.Fatalf("wrong server pin: %v", err)
 	}
 
-	// Unknown client: the server aborts and logs the key to add.
 	conn, err := tls.Dial("tcp", address, stranger.clientTLS(server.fingerprint()))
 	if err == nil {
-		// TLS 1.3 clients finish before the server verifies them; the rejection arrives on read.
 		io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
 		_, err = conn.Read(make([]byte, 1))
 		conn.Close()
@@ -86,10 +82,8 @@ func TestMutualPinning(t *testing.T) {
 	if err == nil {
 		t.Fatal("unknown client accepted")
 	}
-	// The server logs after sending the alert, so the line may land a moment later.
 	waitForLog(t, logs, "-client-key "+stranger.fingerprint())
 
-	// Plaintext is refused; Go's server answers it with a 400 rather than serving it.
 	response, err := http.Get("http://" + address)
 	if err == nil {
 		response.Body.Close()

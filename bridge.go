@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// bridge is the workstation side: a loopback CONNECT proxy that re-issues each
-// CONNECT to the VPN host over pinned mutual TLS. The server's response passes
-// through to the agent unchanged.
 type bridge struct {
 	server    string
 	tlsConfig *tls.Config
@@ -32,9 +29,6 @@ func (b *bridge) dial() (net.Conn, error) {
 	return dialer.DialContext(ctx, "tcp", b.server)
 }
 
-// probe reports a misconfigured pin, unknown identity, or unreachable server at
-// startup instead of on the first agent request. Failure is not fatal: the
-// server may start later. Any HTTP response proves both identities were accepted.
 func (b *bridge) probe() {
 	conn, err := b.dial()
 	if err != nil {
@@ -54,7 +48,6 @@ func (b *bridge) probe() {
 	b.logger.Info("upstream verified", "server", b.server)
 }
 
-// serve runs until the listener is closed.
 func (b *bridge) serve(listener net.Listener) error {
 	slots := make(chan struct{}, maxTunnels)
 	for {
@@ -104,7 +97,6 @@ func (b *bridge) forward(local net.Conn) {
 		return
 	}
 	target := net.JoinHostPort(host, strconv.Itoa(port))
-	// Domain rules do not govern IP literals.
 	if _, err := netip.ParseAddr(host); err != nil {
 		if rule := b.blocklist.match(host); rule != "" {
 			b.logger.Info("destination blocked", "target", target, "rule", rule)
@@ -124,8 +116,6 @@ func (b *bridge) forward(local net.Conn) {
 		respond(local, http.StatusBadGateway, "encrypted upstream unavailable")
 		return
 	}
-	// A TLS 1.3 client completes its handshake before the server has checked
-	// the client certificate, so a rejected identity surfaces on the first read.
 	upstreamReader := bufio.NewReader(upstream)
 	if _, err := upstreamReader.Peek(1); err != nil {
 		b.logger.Warn("encrypted upstream rejected the connection; is this identity a -client-key on the server?", "target", target, "error", err)

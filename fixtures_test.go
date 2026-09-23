@@ -46,7 +46,6 @@ func testIdentity(t *testing.T) *identity {
 	return id
 }
 
-// startServer runs the VPN-host side on loopback and returns its address.
 func startServer(t *testing.T, id *identity, clients map[string]bool, ports map[int]bool, allowPrivate bool, logger *slog.Logger) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -64,7 +63,6 @@ func startServer(t *testing.T, id *identity, clients map[string]bool, ports map[
 	return listener.Addr().String()
 }
 
-// echoServer echoes each connection until the peer half-closes, then closes.
 func echoServer(t *testing.T) (address string, port int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -98,8 +96,6 @@ func startBridge(t *testing.T, b *bridge) string {
 	return listener.Addr().String()
 }
 
-// connect sends one raw request line (plus optional early data) to a proxy,
-// optionally over TLS, and returns the connection and response status.
 func connect(t *testing.T, address string, config *tls.Config, request, early string) (net.Conn, *bufio.Reader, int) {
 	t.Helper()
 	var conn net.Conn
@@ -132,7 +128,6 @@ func connectRequest(target string) string {
 	return "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
 }
 
-// assertEcho writes payload, half-closes, and expects it echoed followed by EOF.
 func assertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, alreadySent, payload string) {
 	t.Helper()
 	if _, err := io.WriteString(conn, payload); err != nil {
@@ -150,7 +145,6 @@ func assertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, alreadySent, 
 	}
 }
 
-// closedPort returns a loopback address nothing listens on.
 func closedPort(t *testing.T) (address string, port int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -161,7 +155,6 @@ func closedPort(t *testing.T) (address string, port int) {
 	return listener.Addr().String(), listener.Addr().(*net.TCPAddr).Port
 }
 
-// waitForLog polls for a log line written by another goroutine.
 func waitForLog(t *testing.T, logs *logBuffer, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

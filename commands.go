@@ -31,7 +31,6 @@ func keyFlag(flags *flag.FlagSet) *string {
 	return flags.String("key", defaultKeyPath(), "Ed25519 identity file, created on first use")
 }
 
-// validEndpoint accepts host:port with a nonzero port.
 func validEndpoint(address string) error {
 	host, portText, err := net.SplitHostPort(address)
 	port, portErr := strconv.Atoi(portText)
@@ -94,10 +93,8 @@ func runServe(logger *slog.Logger, args []string) error {
 	server := &http.Server{
 		Handler:           newProxy(ports, logger),
 		ReadHeaderTimeout: headerTimeout,
-		// Handshake failures are logged here, including unknown client fingerprints.
-		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
-	// Hijacking needs HTTP/1.1 on the outer hop. Tunneled traffic may be anything.
 	server.Protocols = new(http.Protocols)
 	server.Protocols.SetHTTP1(true)
 	logger.Info("serving", "address", listener.Addr(), "identity", id.fingerprint(), "ports", *portsFlag)
@@ -148,8 +145,6 @@ func runBridge(logger *slog.Logger, args []string) error {
 
 var proxyVariables = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"}
 
-// proxyEnv returns environ with proxy variables pointing at the bridge.
-// Existing NO_PROXY entries are kept, deduplicated, and extended with loopback.
 func proxyEnv(environ []string, bridgeAddress string) []string {
 	var noProxy []string
 	env := make([]string, 0, len(environ)+6)

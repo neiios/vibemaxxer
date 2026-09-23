@@ -21,12 +21,10 @@ const (
 	maxTunnels    = 256
 )
 
-// proxy is the VPN-host side: a CONNECT handler behind pinned mutual TLS.
 type proxy struct {
-	ports  map[int]bool
-	logger *slog.Logger
-	slots  chan struct{}
-	// allowPrivate is set only by tests, which tunnel to loopback targets.
+	ports        map[int]bool
+	logger       *slog.Logger
+	slots        chan struct{}
 	allowPrivate bool
 }
 
@@ -34,7 +32,6 @@ func newProxy(ports map[int]bool, logger *slog.Logger) *proxy {
 	return &proxy{ports: ports, logger: logger, slots: make(chan struct{}, maxTunnels)}
 }
 
-// parseConnectTarget returns the authority of a CONNECT request.
 func parseConnectTarget(r *http.Request) (host string, port int, err error) {
 	host, portText, err := net.SplitHostPort(r.URL.Host)
 	if err != nil {
@@ -57,8 +54,6 @@ func publicDestination(addr netip.Addr) bool {
 
 var errPrivateDestination = errors.New("private/local destination blocked")
 
-// dial checks the resolved address right before connecting, so DNS rebinding
-// cannot route a tunnel into the VPN host's LAN or loopback.
 func (p *proxy) dial(ctx context.Context, target string) (net.Conn, error) {
 	dialer := net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	if !p.allowPrivate {
@@ -128,14 +123,10 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = client.SetDeadline(time.Time{})
 	started := time.Now()
 	p.logger.Info("tunnel opened", "client", r.RemoteAddr, "target", target)
-	// The hijacked reader may already hold tunnel bytes sent right after CONNECT.
 	pipe(client, buffered.Reader, upstream, upstream)
 	p.logger.Info("tunnel closed", "client", r.RemoteAddr, "target", target, "duration", time.Since(started))
 }
 
-// pipe relays bytes both ways. Reads go through the given readers so bytes a
-// parser already buffered are not lost. When a finishes sending, b gets a
-// half-close and may still respond; when b finishes, both sides close.
 func pipe(a net.Conn, aReader io.Reader, b net.Conn, bReader io.Reader) {
 	done := make(chan struct{})
 	go func() {

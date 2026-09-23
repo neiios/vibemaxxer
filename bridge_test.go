@@ -14,7 +14,6 @@ func testBridge(t *testing.T, serverAddress string, serverKey string, list domai
 	return startBridge(t, b), logs
 }
 
-// testPair runs a server that admits one bridge and returns both addresses.
 func testPair(t *testing.T, list domainBlocklist, ports ...int) (bridgeAddress string, logs *logBuffer) {
 	t.Helper()
 	server, client := testIdentity(t), testIdentity(t)
@@ -38,11 +37,9 @@ func TestBridgeEndToEnd(t *testing.T) {
 	}
 	assertEcho(t, conn, reader, "early", " and later")
 
-	// Server-side rejections pass through unchanged.
 	if _, _, status := connect(t, address, nil, connectRequest("127.0.0.1:22"), ""); status != http.StatusForbidden {
 		t.Fatalf("disallowed port status %d", status)
 	}
-	// Local validation answers without contacting the server.
 	if _, _, status := connect(t, address, nil, "GET / HTTP/1.1\r\nHost: x\r\n\r\n", ""); status != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status %d", status)
 	}
@@ -53,7 +50,6 @@ func TestBridgeEndToEnd(t *testing.T) {
 
 func TestBridgeBlocklist(t *testing.T) {
 	list := domainBlocklist{"blocked.example": true}
-	// Point the bridge at a closed port: a blocked domain must never reach upstream.
 	closed, _ := closedPort(t)
 	address, logs := testBridge(t, closed, strings.Repeat("0", 64), list)
 	for _, target := range []string{"blocked.example:443", "api.BLOCKED.example.:443"} {
@@ -64,7 +60,6 @@ func TestBridgeBlocklist(t *testing.T) {
 	if !strings.Contains(logs.String(), "rule=blocked.example") {
 		t.Fatalf("block not logged:\n%s", logs.String())
 	}
-	// Not blocked, so the unreachable upstream is reported as 502 instead.
 	if _, _, status := connect(t, address, nil, connectRequest("notblocked.example:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("unblocked status %d", status)
 	}
@@ -75,7 +70,6 @@ func TestBridgeReportsUpstreamFailures(t *testing.T) {
 	logger, _ := testLogger()
 	serverAddress := startServer(t, server, map[string]bool{client.fingerprint(): true}, map[int]bool{443: true}, true, logger)
 
-	// Wrong pin: the agent gets 502 and the log names the presented key.
 	address, logs := testBridge(t, serverAddress, strings.Repeat("0", 64), nil)
 	if _, _, status := connect(t, address, nil, connectRequest("example.com:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("wrong pin status %d", status)
@@ -84,7 +78,6 @@ func TestBridgeReportsUpstreamFailures(t *testing.T) {
 		t.Fatalf("mismatch not logged with fingerprint:\n%s", logs.String())
 	}
 
-	// Unpaired identity: the server refuses the handshake.
 	address, _ = testBridge(t, serverAddress, server.fingerprint(), nil)
 	if _, _, status := connect(t, address, nil, connectRequest("example.com:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("unpaired status %d", status)

@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// domainBlocklist matches a domain and all of its subdomains. A nil list
-// matches nothing.
 type domainBlocklist map[string]bool
 
 func normalizeDomain(name string) string {
@@ -21,7 +19,6 @@ func validDomainRule(name string) bool {
 	}) < 0
 }
 
-// loadBlocklist reads one domain per line; blank lines and # comments are ignored.
 func loadBlocklist(path string) (domainBlocklist, error) {
 	if path == "" {
 		return nil, nil
@@ -47,7 +44,6 @@ func loadBlocklist(path string) (domainBlocklist, error) {
 	return list, scanner.Err()
 }
 
-// match returns the rule that blocks host, or "".
 func (list domainBlocklist) match(host string) string {
 	host = normalizeDomain(host)
 	for host != "" {

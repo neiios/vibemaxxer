@@ -30,7 +30,7 @@ func TestConnectRejections(t *testing.T) {
 		connectRequest(":443"):                    http.StatusBadRequest,
 		connectRequest("example.com:0"):           http.StatusBadRequest,
 		connectRequest(closed):                    http.StatusBadGateway,
-		"CONNECT " + closed + " HTTP/1.1\r\n\r\n": http.StatusBadGateway, // Host header optional
+		"CONNECT " + closed + " HTTP/1.1\r\n\r\n": http.StatusBadGateway,
 	}
 	for request, want := range cases {
 		if _, _, got := connect(t, address, config, request, ""); got != want {

@@ -1,4 +1,3 @@
-// vibemaxxer forwards coding-agent traffic to a VPN host over pinned mutual TLS.
 package main
 
 import (
