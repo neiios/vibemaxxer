@@ -235,7 +235,7 @@ func TestPairingAuthentication(t *testing.T) {
 	}
 }
 
-func startTestBridge(t *testing.T, id *identity, config bridgeState, limit int) (string, context.CancelFunc) {
+func startTestBridge(t *testing.T, id *identity, config bridgeState, limit int, lists ...domainBlocklist) (string, context.CancelFunc) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -245,6 +245,9 @@ func startTestBridge(t *testing.T, id *identity, config bridgeState, limit int) 
 	done := make(chan error, 1)
 	b := &bridge{identity: id, config: config, dialTimeout: time.Second, maxTunnels: limit,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if len(lists) > 0 {
+		b.blocklist = lists[0]
+	}
 	go func() { done <- b.Serve(ctx, listener) }()
 	var once sync.Once
 	stop := func() {
@@ -290,7 +293,7 @@ func TestEncryptedBridgeHTTPSStreaming(t *testing.T) {
 				c.ports = map[int]bool{port: true}
 			})
 			_, id, config, invite := pairedClient(t, server)
-			address, _ := startTestBridge(t, id, config, 8)
+			address, _ := startTestBridge(t, id, config, 8, domainBlocklist{"blocked.example": {}})
 			proxyURL, _ := url.Parse("http://" + address)
 			transport := &http.Transport{
 				Proxy: http.ProxyURL(proxyURL), ForceAttemptHTTP2: http2,

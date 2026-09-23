@@ -17,11 +17,12 @@ type bridge struct {
 	logger      *slog.Logger
 	dialTimeout time.Duration
 	maxTunnels  int
+	blocklist   domainBlocklist
 }
 
 // Serve owns the listener and joins all connection handlers before returning.
-// No HTTP parsing or TLS interception is needed: the complete CONNECT exchange
-// is forwarded inside pinned, mutually authenticated TLS.
+// With filtering enabled, only the CONNECT header is inspected. The complete
+// exchange is forwarded inside pinned, mutually authenticated TLS.
 func (b *bridge) Serve(ctx context.Context, listener net.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
@@ -60,6 +61,14 @@ func (b *bridge) forward(ctx context.Context, local net.Conn) {
 	defer local.Close()
 	stopLocal := context.AfterFunc(ctx, func() { _ = local.Close() })
 	defer stopLocal()
+	var upload io.Reader = local
+	if b.blocklist != nil {
+		var err error
+		upload, err = b.filterCONNECT(local)
+		if err != nil {
+			return
+		}
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, b.dialTimeout)
 	defer cancel()
 	dialer := tls.Dialer{
@@ -81,7 +90,7 @@ func (b *bridge) forward(ctx context.Context, local net.Conn) {
 	uploadDone := make(chan struct{})
 	go func() {
 		defer close(uploadDone)
-		if _, err := io.Copy(upstream, local); err != nil {
+		if _, err := io.Copy(upstream, upload); err != nil {
 			t.close()
 			return
 		}

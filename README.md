@@ -64,6 +64,30 @@ On the **workstation**:
 
 This listens on `127.0.0.1:8888`. It accepts connections only on loopback and forwards them to the paired host using mutually authenticated TLS. It never falls back to plaintext or direct API access if the server is unreachable or its identity changes.
 
+### Optional: block domains on this workstation
+
+Create a static file, for example `blocked-domains.txt`:
+
+```text
+# Domains and all their subdomains
+example.com
+telemetry.vendor.com
+```
+
+Start the local bridge with:
+
+```sh
+./result/bin/vibemaxxer bridge -blocklist ./blocked-domains.txt
+```
+
+The bridge returns `403 Forbidden` for blocked CONNECT destinations **before connecting to the VPN host**. The server is unchanged, and each workstation controls its own list. Allowed traffic still uses encrypted transport, with destination DNS on the VPN host and no TLS interception.
+
+Rules are case-insensitive and ignore one trailing DNS dot. `example.com` also blocks `api.example.com`, but not `notexample.com` or `example.com.other.net`. Use one domain per line; blank lines, surrounding whitespace, duplicate entries, and whole-line `#` comments are allowed. URLs, ports, IP addresses, wildcards, and inline comments are rejected. Internationalized names must use ASCII punycode.
+
+An unreadable or invalid file prevents startup. An empty file is valid; omitting `-blocklist` disables filtering. The file is loaded once: **restart the bridge after edits**. With filtering enabled, local CONNECT headers have a 16 KiB size limit and a 10-second read deadline.
+
+This is an optional workstation policy, not an access-control boundary. It checks only the CONNECT hostname: direct IP addresses, alternative names/DNS aliases, another bridge configuration, or connections bypassing the proxy can evade it. It does not inspect encrypted destinations inside tunnels.
+
 ### 5. Configure your agent
 
 In the terminal where you launch the agent:
@@ -235,7 +259,7 @@ Server flags (`serve`):
 | `-max-tunnels` | `128` | Concurrent tunnels, including pending destination dials (1–65536) |
 | `-allow-private-destinations` | `false` | Permit private/local destination addresses |
 
-`serve` additionally accepts `-advertise HOST:PORT`. Its total accepted connection limit is `max-tunnels + 32`, including TLS handshakes and pairing requests. Headers, pairing bodies, and TLS handshakes have deadlines; tunneled streams have no idle deadline. `bridge` accepts `-listen`, `-dial-timeout` (including upstream TLS handshake), and `-max-tunnels` (including pending handshakes).
+`serve` additionally accepts `-advertise HOST:PORT`. Its total accepted connection limit is `max-tunnels + 32`, including TLS handshakes and pairing requests. Headers, pairing bodies, and TLS handshakes have deadlines; tunneled streams have no idle deadline. `bridge` accepts `-listen`, `-dial-timeout` (including upstream TLS handshake), `-max-tunnels` (including pending headers/handshakes), and optional `-blocklist FILE` for workstation-side domain filtering.
 
 Private, loopback, link-local, unspecified, multicast, and shared CGNAT destinations are blocked by default. Actual DNS-resolved addresses are checked before connecting, including IPv4-mapped IPv6, preventing DNS rebinding around this policy. Only enable private destinations for intentional private-service access. Source allowlists use the TCP peer, never forwarded headers.
 

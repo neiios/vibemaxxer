@@ -201,6 +201,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	listen := flags.String("listen", "127.0.0.1:8888", "loopback IP:port for agents (never a LAN address)")
 	dialTimeout := flags.Duration("dial-timeout", 10*time.Second, "upstream TCP and TLS handshake timeout")
 	maxTunnels := flags.Int("max-tunnels", 128, "maximum local connections, including pending handshakes")
+	blocklistPath := flags.String("blocklist", "", "static domain blocklist file (domains and their subdomains)")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
@@ -210,6 +211,10 @@ func runBridge(logger *slog.Logger, args []string) error {
 	}
 	if *dialTimeout <= 0 || *maxTunnels < 1 || *maxTunnels > 65536 {
 		return errors.New("-dial-timeout must be positive and -max-tunnels must be 1–65536")
+	}
+	blocklist, err := loadBlocklist(*blocklistPath)
+	if err != nil {
+		return err
 	}
 	store, err := openStore(*dir)
 	if err != nil {
@@ -230,6 +235,9 @@ func runBridge(logger *slog.Logger, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	logger.Info("bridge listening", "address", listener.Addr(), "encrypted_upstream", config.Address)
-	b := &bridge{config: config, identity: id, logger: logger, dialTimeout: *dialTimeout, maxTunnels: *maxTunnels}
+	if blocklist != nil {
+		logger.Info("domain blocklist loaded", "path", *blocklistPath, "rules", len(blocklist))
+	}
+	b := &bridge{config: config, identity: id, logger: logger, dialTimeout: *dialTimeout, maxTunnels: *maxTunnels, blocklist: blocklist}
 	return b.Serve(ctx, listener)
 }
