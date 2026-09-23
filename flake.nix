@@ -22,7 +22,7 @@
           default = self.packages.${system}.vibemaxxer;
           vibemaxxer = pkgs.buildGoModule {
             pname = "vibemaxxer";
-            version = "0.2.0";
+            version = "0.3.0";
             src = pkgs.lib.cleanSource self;
             vendorHash = null;
             env.CGO_ENABLED = 0;
@@ -32,7 +32,7 @@
             ];
             doCheck = true;
             meta = {
-              description = "HTTP CONNECT proxy with encrypted transport and one-time device pairing";
+              description = "HTTP CONNECT proxy over pinned mutual TLS for coding agents";
               homepage = "https://github.com/neiios/vibemaxxer";
               mainProgram = "vibemaxxer";
               platforms = systems;

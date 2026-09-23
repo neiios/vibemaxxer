@@ -3,8 +3,5 @@
 /result-*
 /coverage.out
 
-# Never commit locally generated identities or pairing state.
+# Never commit locally generated identities.
 identity.pem
-server.json
-bridge.json
-.lock
