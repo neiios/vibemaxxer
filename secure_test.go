@@ -123,15 +123,14 @@ func secureServer(t *testing.T, mutate func(*proxyConfig)) *secureFixture {
 
 func testInvitation(t *testing.T, server *secureFixture) invitation {
 	t.Helper()
-	code, err := makeInvitation(server.store, server.id, 10*time.Minute)
+	code, err := makeInvitation(server.store, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	invite, err := decodeInvitation(code)
-	if err != nil {
-		t.Fatal(err)
+	if !validPairCode(code) {
+		t.Fatalf("invalid generated code: %q", code)
 	}
-	return invite
+	return invitation{Address: server.address, ServerKey: server.id.fingerprint(), Token: code}
 }
 
 func pairedClient(t *testing.T, server *secureFixture) (*stateStore, *identity, bridgeState, invitation) {
@@ -470,6 +469,40 @@ func TestBridgeShutdownDuringTLSHandshake(t *testing.T) {
 	requireClosed(t, conn)
 }
 
+func TestPairCodeGuessLimit(t *testing.T) {
+	server := secureServer(t, nil)
+	invite := testInvitation(t, server)
+	_, client := testStoreIdentity(t)
+	wrong := "000000"
+	if wrong == invite.Token {
+		wrong = "999999"
+	}
+	for range 9 {
+		if err := enroll(server.store, client.fingerprint(), pairRequest{Name: "test", Token: wrong}); !errors.Is(err, errEnrollmentDenied) {
+			t.Fatalf("wrong code accepted: %v", err)
+		}
+	}
+	state, err := server.store.readServer()
+	if err != nil || state.Pending.Attempts != 9 {
+		t.Fatalf("guess count was not persisted: %+v %v", state.Pending, err)
+	}
+	if err := enroll(server.store, client.fingerprint(), pairRequest{Name: "test", Token: invite.Token}); err != nil {
+		t.Fatalf("valid code rejected before guess limit: %v", err)
+	}
+	invite = testInvitation(t, server)
+	if wrong == invite.Token {
+		wrong = "999999"
+	}
+	for range 10 {
+		if err := enroll(server.store, client.fingerprint(), pairRequest{Name: "test", Token: wrong}); !errors.Is(err, errEnrollmentDenied) {
+			t.Fatalf("wrong code accepted: %v", err)
+		}
+	}
+	if err := enroll(server.store, client.fingerprint(), pairRequest{Name: "test", Token: invite.Token}); !errors.Is(err, errEnrollmentDenied) {
+		t.Fatalf("code accepted after guess limit: %v", err)
+	}
+}
+
 func TestInvitationLifecycleAndAtomicConsumption(t *testing.T) {
 	server := secureServer(t, nil)
 	first := testInvitation(t, server)
@@ -581,9 +614,12 @@ func TestEncryptedCommandValidation(t *testing.T) {
 			t.Errorf("invalid endpoint accepted: %q", endpoint)
 		}
 	}
-	for _, code := range []string{"", "not-an-invitation", invitationPrefix + "invalid", strings.Repeat("a", maxInvitationSize+1)} {
-		if _, err := decodeInvitation(code); err == nil {
-			t.Errorf("invalid invitation accepted")
+	if !validPairCode("000123") {
+		t.Fatal("leading zeroes rejected")
+	}
+	for _, code := range []string{"", "12345", "1234567", "12a456", "-12345", "123456\n"} {
+		if validPairCode(code) {
+			t.Errorf("invalid code accepted: %q", code)
 		}
 	}
 	for _, name := range []string{"", "with space", "new\nline", strings.Repeat("x", 65)} {

@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -143,11 +141,20 @@ func TestPairCommandAndInvitationValidation(t *testing.T) {
 	}
 	clientDir := filepath.Join(t.TempDir(), "client")
 	var output bytes.Buffer
-	if err := runPair([]string{"-state-dir", clientDir, "-name", "test-cli"}, &code, &output); err != nil {
+	lines := strings.Split(strings.TrimSpace(code.String()), "\n")
+	if len(lines) != 2 || lines[0] != "Server: "+server.address || !strings.HasPrefix(lines[1], "Code: ") || !validPairCode(strings.TrimPrefix(lines[1], "Code: ")) {
+		t.Fatalf("bad pair-code output: %q", code.String())
+	}
+	if err := runPair([]string{"-state-dir", clientDir, "-name", "test-cli", "-server", server.address}, strings.NewReader(strings.TrimPrefix(lines[1], "Code: ")+"\n"), &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "Paired test-cli") || strings.Contains(output.String(), invitationPrefix) {
+	if !strings.Contains(output.String(), "Paired test-cli") || strings.Contains(output.String(), strings.TrimPrefix(lines[1], "Code: ")) {
 		t.Fatalf("unexpected command output: %q", output.String())
+	}
+	for _, input := range []string{"12345\n", "1234567\n", "123a56\n"} {
+		if err := runPair([]string{"-server", server.address}, strings.NewReader(input), io.Discard); err == nil {
+			t.Fatalf("invalid code accepted: %q", input)
+		}
 	}
 	store, err := openStore(clientDir)
 	if err != nil {
@@ -162,16 +169,14 @@ func TestPairCommandAndInvitationValidation(t *testing.T) {
 		t.Fatal("same-state self pairing accepted")
 	}
 	for _, change := range []func(*invitation){
-		func(i *invitation) { i.ExpiresAt = time.Now().Add(-time.Second) },
-		func(i *invitation) { i.Version = 2 },
 		func(i *invitation) { i.Token = "short" },
 		func(i *invitation) { i.ServerKey = "invalid" },
 		func(i *invitation) { i.Address = "0.0.0.0:8443" },
 	} {
 		invalid := invite
 		change(&invalid)
-		data, _ := json.Marshal(invalid)
-		if _, err := decodeInvitation(invitationPrefix + base64.RawURLEncoding.EncodeToString(data)); err == nil {
+		store, id := testStoreIdentity(t)
+		if err := pair(context.Background(), store, id, invalid, "test", false); err == nil {
 			t.Fatal("invalid invitation accepted")
 		}
 	}

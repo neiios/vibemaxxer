@@ -35,26 +35,24 @@ Replace the address with that machine's LAN IP:
 
 First startup automatically generates and saves the host's identity. Only paired clients can open tunnels. Optionally add `-allow 192.168.1.20` to restrict both pairing and proxy requests to your workstation's IP as an additional safeguard.
 
-In another terminal on the **VPN host**, generate an invitation:
+In another terminal on the **VPN host**, generate a pairing code:
 
 ```sh
 ./result/bin/vibemaxxer pair-code
 ```
 
-It prints one `vibemaxxer-pair-v1:...` line. Copy it to the workstation through a **trusted channel**: physical access, an authenticated SSH session, or a secure messenger. Anyone who obtains the invitation before it is used can enroll their own device; replacing it in transit can redirect trust to another server.
-
-An invitation expires after **10 minutes**, works **once**, and is replaced by the next `pair-code`. Restarting `serve` cancels outstanding invitations but preserves paired clients. Never post an invitation in an issue, commit it, or paste it into a shell command.
+It prints the server address and a **six-digit code** (including any leading zeroes). Take both to the workstation through a trusted channel. Anyone who obtains the code before it is used can enroll their device. A code expires after **10 minutes**, works **once**, permits at most **10 incorrect attempts**, and is replaced by the next `pair-code`. Restarting `serve` cancels outstanding codes but preserves paired clients. Do not post a code publicly or paste it into a shell command.
 
 ### 3. Pair the workstation
 
 On the **workstation**:
 
 ```sh
-./result/bin/vibemaxxer pair -name workstation
-# Paste the invitation at the program's prompt, then press Enter.
+./result/bin/vibemaxxer pair -name workstation -server 192.168.1.50:8443
+# Enter the six-digit code at the prompt, then press Enter.
 ```
 
-The workstation generates its own identity, verifies the server's public-key fingerprint from the invitation, and registers its public key. Private keys stay on their respective machines. The server address and pinned key are saved automatically.
+Use the `Server:` address printed by `pair-code` for `-server`. The workstation generates its own identity, checks the server's self-signed identity certificate, and pins its public key after the code is accepted. Private keys stay on their respective machines. **A six-digit code does not protect initial pairing against an active man-in-the-middle**: pair on a trusted LAN, or independently verify the full server identity shown in the `serve` log and supply it with `pair -server-key FINGERPRINT`. Later bridge connections require the saved pin.
 
 ### 4. Start the local bridge
 
@@ -119,17 +117,17 @@ On the VPN host:
 
 Revocation blocks new CONNECT requests and closes active tunnels, normally within one second. Changes apply without restarting the server. If the server cannot read its authorization state, it denies new connections and closes active tunnels rather than retaining access.
 
-For another workstation, create a new invitation and pair with a different name. Names use 1–64 ASCII letters, digits, dots, underscores, or hyphens; the default is the workstation hostname.
+For another workstation, create a new code and pair with a different name. Names use 1–64 ASCII letters, digits, dots, underscores, or hyphens; the default is the workstation hostname.
 
 ### Change address, replace identities, or recover
 
-- **Server LAN IP changed:** restart `serve` with the new address, generate an invitation, and run `pair -replace` on the workstation. Restart `bridge` afterwards. The identity key stays unchanged.
-- **DNS name or wildcard bind:** `serve -listen 0.0.0.0:8443 -advertise vpn-host.example:8443`. `-advertise` must be reachable from the workstation; wildcard addresses cannot appear in invitations. Binding a single LAN IP is preferred.
-- **Lost/reinstalled workstation:** revoke its old entry on the host, create an invitation, and pair the replacement. Revocation frees the old name.
+- **Server LAN IP changed:** restart `serve` with the new address, generate a code, and run `pair -server NEW_HOST:PORT -replace` on the workstation. Restart `bridge` afterwards. The identity key stays unchanged.
+- **DNS name or wildcard bind:** `serve -listen 0.0.0.0:8443 -advertise vpn-host.example:8443`. `-advertise` must be reachable from the workstation; wildcard addresses cannot be used with `pair -server`. Binding a single LAN IP is preferred.
+- **Lost/reinstalled workstation:** revoke its old entry on the host, create a code, and pair the replacement. Revocation frees the old name.
 - **Lost or compromised identity key:** revoke the affected client, or stop the affected server. Use a new private state directory and pair again via a trusted channel. Missing keys in existing state are **not silently regenerated**. Replacing a server identity requires re-pairing every workstation.
 - **Backup:** a securely stored copy of the state directory preserves the identity and pairings. Treat backups as credentials. Do not copy one workstation's identity to another.
 
-`pair -replace` explicitly permits overwriting the workstation's saved server selection; it does not revoke the old registration on a previous server. Revoke that separately if no longer needed. Restart the bridge after pairing/configuration changes. Enrollment uses a direct pinned TLS connection, ignores proxy environment variables, and never follows redirects.
+`pair -replace` explicitly permits overwriting the workstation's saved server selection; it does not revoke the old registration on a previous server. Revoke that separately if no longer needed. Restart the bridge after pairing/configuration changes. Enrollment connects directly over TLS, ignores proxy environment variables, and never follows redirects. Supply `-server-key` to verify a trusted pin during initial enrollment; otherwise the TLS identity is pinned after successful enrollment.
 
 ## Client setup
 
@@ -218,8 +216,8 @@ These checks are not proof that every possible connection is covered. For mandat
 | Command | Purpose |
 | --- | --- |
 | `serve` | TLS 1.3 CONNECT server; default `127.0.0.1:8443` |
-| `pair-code` | Single-use invitation; optional `-ttl 10m` (1m–1h) |
-| `pair` | Read invitation from stdin; optional `-name`, `-replace` |
+| `pair-code` | Single-use six-digit code; optional `-ttl 10m` (1m–1h) |
+| `pair` | Read code from stdin; required `-server HOST:PORT`; optional `-server-key`, `-name`, `-replace` |
 | `bridge` | Workstation proxy; default `127.0.0.1:8888`, loopback binds only |
 | `clients list` | Show paired names and full public-key fingerprints |
 | `clients revoke NAME_OR_FULL_ID` | Remove a client's access |
@@ -252,7 +250,7 @@ An HTTP `405` usually means something sent ordinary HTTP instead of CONNECT; `40
 - **DNS for CONNECT destinations runs on the VPN host.** Configure that resolver to use the VPN. The workstation may resolve the proxy's own advertised DNS name; client code that ignores proxy settings may also perform local DNS/network requests.
 - **CONNECT-only, not a general gateway.** Ordinary HTTP gets `405`; SOCKS and UDP are unsupported. Trusted clients can tunnel arbitrary TCP bytes to allowed destinations/ports; port restrictions do not verify that those bytes are TLS.
 - **Subprocesses can bypass application proxies.** Browser login, MCP servers, shell commands, custom extensions, and remote agents may need separate configuration or network enforcement.
-- **Logs contain metadata, not secrets:** client IPs, pairing names/public fingerprints, destinations, errors, and durations. Invitations are printed only by `pair-code`; enrollment tokens, private keys, prompts, and API headers are not logged. Treat destination metadata as sensitive.
+- **Logs contain metadata, not secrets:** client IPs, pairing names/public fingerprints, destinations, errors, and durations. Codes are printed only by `pair-code`; enrollment tokens, private keys, prompts, and API headers are not logged. Treat destination metadata as sensitive.
 
 TLS uses Go's standard implementation, with pinned Ed25519 identities and SHA-256 public-key fingerprints. This is not a bespoke encryption protocol. Custom pin verification replaces Web PKI hostname/CA trust only for the outer connection; it does not disable peer authentication. No external security audit has been performed.
 

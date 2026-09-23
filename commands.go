@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -46,8 +47,8 @@ func printCommands(out io.Writer) {
 	fmt.Fprintln(out, `Usage: vibemaxxer COMMAND [flags]
 
   serve       Encrypted TLS 1.3 CONNECT server (VPN host)
-  pair-code   Create a single-use, 10-minute pairing invitation (VPN host)
-  pair        Read an invitation from stdin and pair this workstation
+  pair-code   Create a single-use, 10-minute six-digit code (VPN host)
+  pair        Read a six-digit code from stdin and pair this workstation
   bridge      Loopback HTTP proxy forwarding through paired TLS
   clients     List or revoke paired workstations (VPN host)
 
@@ -78,18 +79,18 @@ func runPairCode(args []string, out io.Writer) error {
 		return err
 	}
 	// Do not generate an identity for a server that has never been initialized.
-	if _, err := store.readServer(); err != nil {
+	state, err := store.readServer()
+	if err != nil {
 		return fmt.Errorf("start 'serve' with this state directory first: %w", err)
 	}
-	id, err := loadIdentity(store)
+	if _, err := loadIdentity(store); err != nil {
+		return err
+	}
+	code, err := makeInvitation(store, *ttl)
 	if err != nil {
 		return err
 	}
-	code, err := makeInvitation(store, id, *ttl)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(out, code)
+	_, err = fmt.Fprintf(out, "Server: %s\nCode: %s\n", state.Address, code)
 	return err
 }
 
@@ -99,18 +100,27 @@ func runPair(args []string, input io.Reader, out io.Writer) error {
 	hostname, _ := os.Hostname()
 	name := flags.String("name", hostname, "workstation name (letters, digits, dots, underscores, hyphens)")
 	replace := flags.Bool("replace", false, "explicitly replace this workstation's saved server")
+	server := flags.String("server", "", "server address from pair-code (HOST:PORT)")
+	serverKey := flags.String("server-key", "", "optional trusted SHA-256 server identity fingerprint")
 	if err := parseCommandFlags(flags, args); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "Paste the pairing invitation from your VPN host (sensitive; do not share it):")
-	line, err := bufio.NewReader(io.LimitReader(input, maxInvitationSize+2)).ReadString('\n')
+	if err := validEndpoint(*server); err != nil {
+		return fmt.Errorf("-server: %w", err)
+	}
+	if *serverKey != "" && !validFingerprint(*serverKey) {
+		return errors.New("invalid -server-key fingerprint")
+	}
+	fmt.Fprintln(out, "Enter the six-digit pairing code from your VPN host:")
+	line, err := bufio.NewReader(io.LimitReader(input, 8)).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	invite, err := decodeInvitation(line)
-	if err != nil {
-		return err
+	code := strings.TrimSuffix(line, "\n")
+	if !validPairCode(code) {
+		return errors.New("pairing code must be exactly six digits")
 	}
+	invite := invitation{Address: *server, ServerKey: *serverKey, Token: code}
 	store, err := openStore(*dir)
 	if err != nil {
 		return err

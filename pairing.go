@@ -8,12 +8,12 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -23,15 +23,10 @@ import (
 	"time"
 )
 
-const invitationPrefix = "vibemaxxer-pair-v1:"
-const maxInvitationSize = 4096
-
 type invitation struct {
-	Version   int       `json:"version"`
-	Address   string    `json:"address"`
-	ServerKey string    `json:"server_key"`
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Address   string
+	ServerKey string // Optional out-of-band pin; otherwise pin the authenticated TLS peer after enrollment.
+	Token     string
 }
 
 type pairRequest struct {
@@ -68,73 +63,57 @@ func tokenHash(token string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func makeInvitation(store *stateStore, id *identity, ttl time.Duration) (string, error) {
+func validPairCode(code string) bool {
+	if len(code) != 6 {
+		return false
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func makeInvitation(store *stateStore, ttl time.Duration) (string, error) {
 	if ttl < time.Minute || ttl > time.Hour {
 		return "", errors.New("invitation lifetime must be between 1m and 1h")
 	}
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
+	// Rejection sampling in crypto/rand.Int avoids modulo bias; retain leading zeroes.
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
 		return "", err
 	}
-	invite := invitation{
-		Version: 1, ServerKey: id.fingerprint(), Token: base64.RawURLEncoding.EncodeToString(random),
-		ExpiresAt: time.Now().Add(ttl),
-	}
+	code := fmt.Sprintf("%06d", n.Int64())
 	if err := store.updateServer(func(state *serverState) error {
 		if err := validEndpoint(state.Address); err != nil {
 			return err
 		}
-		invite.Address = state.Address
-		state.Pending = &pendingInvitation{TokenHash: tokenHash(invite.Token), ExpiresAt: invite.ExpiresAt}
+		state.Pending = &pendingInvitation{TokenHash: tokenHash(code), ExpiresAt: time.Now().Add(ttl)}
 		return nil
 	}); err != nil {
 		return "", fmt.Errorf("create invitation (start 'serve' first): %w", err)
 	}
-	data, err := json.Marshal(invite)
-	if err != nil {
-		return "", err
-	}
-	return invitationPrefix + base64.RawURLEncoding.EncodeToString(data), nil
-}
-
-func decodeInvitation(code string) (invitation, error) {
-	var invite invitation
-	code = strings.TrimSpace(code)
-	if len(code) > maxInvitationSize || !strings.HasPrefix(code, invitationPrefix) {
-		return invite, errors.New("invalid pairing invitation")
-	}
-	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(code, invitationPrefix))
-	if err != nil {
-		return invite, errors.New("invalid pairing invitation encoding")
-	}
-	if err := json.Unmarshal(data, &invite); err != nil || invite.Version != 1 || !validFingerprint(invite.ServerKey) {
-		return invite, errors.New("invalid or unsupported pairing invitation")
-	}
-	if err := validEndpoint(invite.Address); err != nil {
-		return invite, err
-	}
-	token, err := base64.RawURLEncoding.DecodeString(invite.Token)
-	if err != nil || len(token) != 32 {
-		return invite, errors.New("invalid invitation token")
-	}
-	if !time.Now().Before(invite.ExpiresAt) {
-		return invite, errors.New("pairing invitation has expired")
-	}
-	return invite, nil
+	return code, nil
 }
 
 var errEnrollmentDenied = errors.New("invalid, expired, or already used invitation")
 var errClientName = errors.New("client name already belongs to another identity")
 
 func enroll(store *stateStore, key string, request pairRequest) error {
-	if !validFingerprint(key) || !validClientName(request.Name) {
+	if !validFingerprint(key) || !validClientName(request.Name) || !validPairCode(request.Token) {
 		return errors.New("invalid client identity or name")
 	}
-	return store.updateServer(func(state *serverState) error {
+	denied := false
+	err := store.updateServer(func(state *serverState) error {
 		pending := state.Pending
-		if pending == nil || !time.Now().Before(pending.ExpiresAt) ||
-			subtle.ConstantTimeCompare([]byte(tokenHash(request.Token)), []byte(pending.TokenHash)) != 1 {
+		if pending == nil || !time.Now().Before(pending.ExpiresAt) || pending.Attempts >= 10 {
 			return errEnrollmentDenied
+		}
+		if subtle.ConstantTimeCompare([]byte(tokenHash(request.Token)), []byte(pending.TokenHash)) != 1 {
+			pending.Attempts++ // Persist across processes/restarts; bound online guesses.
+			denied = true
+			return nil
 		}
 		for existingKey, client := range state.Clients {
 			if client.Name == request.Name && existingKey != key {
@@ -148,6 +127,10 @@ func enroll(store *stateStore, key string, request pairRequest) error {
 		state.Pending = nil // Consumed atomically with registration, across processes.
 		return nil
 	})
+	if err == nil && denied {
+		return errEnrollmentDenied
+	}
+	return err
 }
 
 type secureHandler struct {
@@ -257,6 +240,12 @@ func pair(ctx context.Context, store *stateStore, id *identity, invite invitatio
 	if id.fingerprint() == invite.ServerKey {
 		return errors.New("server and workstation must use separate identities/state directories")
 	}
+	if err := validEndpoint(invite.Address); err != nil {
+		return err
+	}
+	if !validPairCode(invite.Token) || invite.ServerKey != "" && !validFingerprint(invite.ServerKey) {
+		return errors.New("invalid pairing code or server fingerprint")
+	}
 	if !validClientName(name) {
 		return errors.New("client name must be 1–64 ASCII letters, digits, dots, underscores, or hyphens")
 	}
@@ -272,9 +261,28 @@ func pair(ctx context.Context, store *stateStore, id *identity, invite invitatio
 			return err
 		}
 		body, _ := json.Marshal(pairRequest{Token: invite.Token, Name: name})
+		// The code alone cannot authenticate a server against an active MITM.
+		// Verify the identity certificate, and optionally require an out-of-band pin.
+		// Only persist the observed key after the server accepts the code.
+		var serverKey string
+		tlsConfig := id.clientTLS(invite.ServerKey)
+		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+			key, err := peerIdentity(state, x509.ExtKeyUsageServerAuth)
+			if err != nil {
+				return err
+			}
+			if key == id.fingerprint() {
+				return errors.New("server and workstation must use separate identities/state directories")
+			}
+			if invite.ServerKey != "" && key != invite.ServerKey {
+				return errors.New("server identity does not match supplied fingerprint")
+			}
+			serverKey = key
+			return nil
+		}
 		transport := &http.Transport{
-			// Never inherit HTTP_PROXY: enrollment must connect to the pinned server.
-			TLSClientConfig:     id.clientTLS(invite.ServerKey),
+			// Never inherit HTTP_PROXY: enrollment must connect directly to the server.
+			TLSClientConfig:     tlsConfig,
 			DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 			TLSHandshakeTimeout: 10 * time.Second, DisableKeepAlives: true,
 		}
@@ -296,7 +304,7 @@ func pair(ctx context.Context, store *stateStore, id *identity, invite invitatio
 		if response.StatusCode != http.StatusNoContent {
 			return fmt.Errorf("pairing denied (HTTP %d); check invitation, allowlist, and client name", response.StatusCode)
 		}
-		config := bridgeState{Version: 1, Address: invite.Address, ServerKey: invite.ServerKey}
+		config := bridgeState{Version: 1, Address: invite.Address, ServerKey: serverKey}
 		if err := store.write("bridge.json", config); err != nil {
 			return fmt.Errorf("server registered this client, but local state could not be saved; fix storage and create a new invitation: %w", err)
 		}

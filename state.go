@@ -29,6 +29,7 @@ type clientRecord struct {
 type pendingInvitation struct {
 	TokenHash string    `json:"token_hash"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Attempts  int       `json:"attempts,omitempty"`
 }
 
 type serverState struct {
