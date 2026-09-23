@@ -3,74 +3,58 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"net/netip"
 	"os"
 	"strings"
 )
 
-// domainBlocklist is immutable after startup. A nil list disables filtering.
-type domainBlocklist map[string]struct{}
+// domainBlocklist matches a domain and all of its subdomains. A nil list
+// matches nothing.
+type domainBlocklist map[string]bool
 
-func normalizeDomain(name string) (string, error) {
-	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	if len(name) == 0 || len(name) > 253 {
-		return "", fmt.Errorf("invalid domain %q", name)
-	}
-	for _, label := range strings.Split(name, ".") {
-		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "", fmt.Errorf("invalid domain %q", name)
-		}
-		for _, c := range label {
-			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
-				return "", fmt.Errorf("invalid domain %q (use ASCII/punycode)", name)
-			}
-		}
-	}
-	return name, nil
+func normalizeDomain(name string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
 }
 
+func validDomainRule(name string) bool {
+	return name != "" && strings.IndexFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.')
+	}) < 0
+}
+
+// loadBlocklist reads one domain per line; blank lines and # comments are ignored.
 func loadBlocklist(path string) (domainBlocklist, error) {
 	if path == "" {
 		return nil, nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("load blocklist: %w", err)
+		return nil, err
 	}
 	defer file.Close()
 	list := make(domainBlocklist)
 	scanner := bufio.NewScanner(file)
-	line := 0
-	for scanner.Scan() {
-		line++
+	for line := 1; scanner.Scan(); line++ {
 		text := strings.TrimSpace(scanner.Text())
 		if text == "" || strings.HasPrefix(text, "#") {
 			continue
 		}
-		name, err := normalizeDomain(text)
-		if _, ipErr := netip.ParseAddr(name); ipErr == nil {
-			err = fmt.Errorf("IP addresses are not domain rules")
+		name := normalizeDomain(text)
+		if !validDomainRule(name) {
+			return nil, fmt.Errorf("%s:%d: %q is not a domain (use one ASCII/punycode domain per line)", path, line, text)
 		}
-		if err != nil {
-			return nil, fmt.Errorf("%s:%d: %w", path, line, err)
-		}
-		list[name] = struct{}{}
+		list[name] = true
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("%s:%d: %w", path, line+1, err)
-	}
-	return list, nil
+	return list, scanner.Err()
 }
 
+// match returns the rule that blocks host, or "".
 func (list domainBlocklist) match(host string) string {
-	for {
-		if _, ok := list[host]; ok {
+	host = normalizeDomain(host)
+	for host != "" {
+		if list[host] {
 			return host
 		}
-		_, parent, found := strings.Cut(host, ".")
-		if !found {
-			return ""
-		}
-		host = parent
+		_, host, _ = strings.Cut(host, ".")
 	}
+	return ""
 }

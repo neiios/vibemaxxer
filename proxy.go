@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -10,57 +11,40 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
 
-type proxyConfig struct {
-	allowed      []netip.Prefix
-	ports        map[int]bool
-	dialTimeout  time.Duration
-	maxTunnels   int
+const (
+	dialTimeout   = 10 * time.Second
+	headerTimeout = 10 * time.Second
+	maxTunnels    = 256
+)
+
+// proxy is the VPN-host side: a CONNECT handler behind pinned mutual TLS.
+type proxy struct {
+	ports  map[int]bool
+	logger *slog.Logger
+	slots  chan struct{}
+	// allowPrivate is set only by tests, which tunnel to loopback targets.
 	allowPrivate bool
 }
 
-type tunnel struct{ client, upstream net.Conn }
-
-func (t *tunnel) close() {
-	_ = t.client.Close()
-	_ = t.upstream.Close()
+func newProxy(ports map[int]bool, logger *slog.Logger) *proxy {
+	return &proxy{ports: ports, logger: logger, slots: make(chan struct{}, maxTunnels)}
 }
 
-type proxy struct {
-	config  proxyConfig
-	logger  *slog.Logger
-	slots   chan struct{}
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	closed  bool
-	tunnels map[*tunnel]struct{}
-}
-
-func newProxy(config proxyConfig, logger *slog.Logger) *proxy {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &proxy{
-		config: config, logger: logger, slots: make(chan struct{}, config.maxTunnels),
-		ctx: ctx, cancel: cancel, tunnels: make(map[*tunnel]struct{}),
-	}
-}
-
-func (p *proxy) clientAllowed(remote string) bool {
-	peer, err := netip.ParseAddrPort(remote)
+// parseConnectTarget returns the authority of a CONNECT request.
+func parseConnectTarget(r *http.Request) (host string, port int, err error) {
+	host, portText, err := net.SplitHostPort(r.URL.Host)
 	if err != nil {
-		return false
+		return "", 0, errors.New("expected CONNECT host:port")
 	}
-	addr := peer.Addr().Unmap().WithZone("")
-	for _, prefix := range p.config.allowed {
-		if prefix.Contains(addr) {
-			return true
-		}
+	port, err = strconv.Atoi(portText)
+	if err != nil || host == "" || port < 1 || port > 65535 {
+		return "", 0, errors.New("expected CONNECT host:port")
 	}
-	return false
+	return host, port, nil
 }
 
 var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
@@ -73,11 +57,11 @@ func publicDestination(addr netip.Addr) bool {
 
 var errPrivateDestination = errors.New("private/local destination blocked")
 
+// dial checks the resolved address right before connecting, so DNS rebinding
+// cannot route a tunnel into the VPN host's LAN or loopback.
 func (p *proxy) dial(ctx context.Context, target string) (net.Conn, error) {
-	dialer := net.Dialer{Timeout: p.config.dialTimeout, KeepAlive: 30 * time.Second}
-	if !p.config.allowPrivate {
-		// ControlContext receives the actual resolved IP before connect, not the
-		// hostname. This blocks DNS rebinding without giving up Happy Eyeballs.
+	dialer := net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	if !p.allowPrivate {
 		dialer.ControlContext = func(_ context.Context, _, address string, _ syscall.RawConn) error {
 			endpoint, err := netip.ParseAddrPort(address)
 			if err != nil || !publicDestination(endpoint.Addr()) {
@@ -95,33 +79,19 @@ func reject(w http.ResponseWriter, status int, message string) {
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Trust only the TCP peer, never Forwarded or X-Forwarded-For headers.
-	if !p.clientAllowed(r.RemoteAddr) {
-		reject(w, http.StatusForbidden, "client not allowed")
-		return
-	}
 	if r.Method != http.MethodConnect {
 		w.Header().Set("Allow", http.MethodConnect)
 		reject(w, http.StatusMethodNotAllowed, "only CONNECT is supported")
 		return
 	}
-	host, portText, err := net.SplitHostPort(r.RequestURI)
-	port, portErr := strconv.Atoi(portText)
-	if err != nil || host == "" || strings.ContainsAny(host, "/?#@\\% \t\r\n") ||
-		portErr != nil || port < 1 || port > 65535 || r.URL.Host != r.RequestURI ||
-		r.URL.Scheme != "" || r.ContentLength > 0 || len(r.TransferEncoding) != 0 {
-		reject(w, http.StatusBadRequest, "expected CONNECT hostname:port without a request body")
+	host, port, err := parseConnectTarget(r)
+	if err != nil {
+		reject(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !p.config.ports[port] {
+	if !p.ports[port] {
 		reject(w, http.StatusForbidden, "destination port not allowed")
 		return
-	}
-	select {
-	case <-p.ctx.Done():
-		reject(w, http.StatusServiceUnavailable, "proxy shutting down")
-		return
-	default:
 	}
 	select {
 	case p.slots <- struct{}{}:
@@ -130,17 +100,8 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reject(w, http.StatusServiceUnavailable, "tunnel limit reached")
 		return
 	}
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		reject(w, http.StatusInternalServerError, "HTTP/1.x connection required")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), p.config.dialTimeout)
-	stop := context.AfterFunc(p.ctx, cancel)
-	defer stop()
-	defer cancel()
 	target := net.JoinHostPort(host, strconv.Itoa(port))
-	upstream, err := p.dial(ctx, target)
+	upstream, err := p.dial(r.Context(), target)
 	if err != nil {
 		status := http.StatusBadGateway
 		var netErr net.Error
@@ -154,69 +115,54 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer upstream.Close()
-	client, buffered, err := hijacker.Hijack()
+	client, buffered, err := http.NewResponseController(w).Hijack()
 	if err != nil {
 		p.logger.Warn("hijack failed", "error", err)
 		return
 	}
-	t := &tunnel{client: client, upstream: upstream}
-	defer t.close()
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return
-	}
-	p.tunnels[t] = struct{}{}
-	p.mu.Unlock()
-	defer func() {
-		p.mu.Lock()
-		delete(p.tunnels, t)
-		p.mu.Unlock()
-	}()
-
-	// Bound the CONNECT response write, but not the lifetime of a stream.
-	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := buffered.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
-		return
-	}
-	if err := buffered.Flush(); err != nil {
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(headerTimeout))
+	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		return
 	}
 	_ = client.SetDeadline(time.Time{})
 	started := time.Now()
 	p.logger.Info("tunnel opened", "client", r.RemoteAddr, "target", target)
-	defer func() {
-		p.logger.Info("tunnel closed", "client", r.RemoteAddr, "target", target, "duration", time.Since(started))
-	}()
-
-	uploadDone := make(chan struct{})
-	go func() {
-		defer close(uploadDone)
-		// Hijack can return already-buffered tunnel bytes. Read those first.
-		if _, err := io.Copy(upstream, buffered.Reader); err != nil {
-			t.close()
-			return
-		}
-		// A client may finish uploading and still expect a response.
-		if tcp, ok := upstream.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}()
-	_, _ = io.Copy(client, upstream)
-	t.close()
-	<-uploadDone
+	// The hijacked reader may already hold tunnel bytes sent right after CONNECT.
+	pipe(client, buffered.Reader, upstream, upstream)
+	p.logger.Info("tunnel closed", "client", r.RemoteAddr, "target", target, "duration", time.Since(started))
 }
 
-func (p *proxy) Close() {
-	p.cancel() // Interrupt pending DNS lookups and dials as well as active tunnels.
-	p.mu.Lock()
-	p.closed = true
-	active := make([]*tunnel, 0, len(p.tunnels))
-	for t := range p.tunnels {
-		active = append(active, t)
+// pipe relays bytes both ways. Reads go through the given readers so bytes a
+// parser already buffered are not lost. When a finishes sending, b gets a
+// half-close and may still respond; when b finishes, both sides close.
+func pipe(a net.Conn, aReader io.Reader, b net.Conn, bReader io.Reader) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := io.Copy(b, aReader); err != nil {
+			a.Close()
+			b.Close()
+			return
+		}
+		if cw, ok := b.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+	}()
+	_, _ = io.Copy(a, bReader)
+	a.Close()
+	b.Close()
+	<-done
+}
+
+func parsePorts(value string) (map[int]bool, error) {
+	ports := make(map[int]bool)
+	for _, part := range strings.Split(value, ",") {
+		port, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid destination port %q", part)
+		}
+		ports[port] = true
 	}
-	p.mu.Unlock()
-	for _, t := range active {
-		t.close()
-	}
+	return ports, nil
 }

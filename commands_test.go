@@ -2,51 +2,63 @@ package main
 
 import (
 	"bytes"
-	"errors"
-	"flag"
-	"io"
-	"log/slog"
-	"net/netip"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestCommandsRequireExplicitEncryptedFlow(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+func TestFlagValidation(t *testing.T) {
+	logger, _ := testLogger()
+	key := filepath.Join(t.TempDir(), "id.pem")
+	fp := strings.Repeat("ab", 32)
+	closed, _ := closedPort(t)
 	for _, args := range [][]string{
-		{"plain", "-listen", "invalid"},
-		{"-listen", "invalid"},
-		{"-allow", "127.0.0.1"},
-		{"unknown"},
+		{"serve"},
+		{"serve", "-listen", "127.0.0.1:0"},
+		{"serve", "-listen", "127.0.0.1:0", "-client-key", "nothex"},
+		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "-ports", "https"},
+		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "extra"},
+		{"bridge"},
+		{"bridge", "-server", "host", "-server-key", fp},
+		{"bridge", "-server", "host:8443", "-server-key", "short"},
+		{"bridge", "-server", "host:8443", "-server-key", fp, "-listen", "192.168.1.5:8888"},
+		{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key},
+		{"run"},
+		{"run", "-bridge", closed, "true"},
+		{"nonsense"},
 	} {
-		if err := run(logger, args); err == nil || !strings.Contains(err.Error(), "unknown command") {
-			t.Errorf("run(%q) = %v; want command rejection, not listener startup", args, err)
+		if err := run(logger, args); err == nil {
+			t.Errorf("%v: accepted", args)
 		}
-	}
-	for _, args := range [][]string{nil, {"help"}, {"-h"}, {"-help"}, {"--help"}} {
-		if err := run(logger, args); err != nil {
-			t.Errorf("run(%q): %v", args, err)
-		}
-	}
-	for _, command := range []string{"serve", "bridge", "pair", "pair-code"} {
-		if err := run(logger, []string{command, "-help"}); !errors.Is(err, flag.ErrHelp) {
-			t.Errorf("%s -help: %v", command, err)
-		}
-	}
-	var output bytes.Buffer
-	printCommands(&output)
-	if strings.Contains(output.String(), "plain") || strings.Contains(output.String(), "legacy") {
-		t.Fatal("help still advertises the removed flow")
 	}
 }
 
-func TestServerAllowlistDefaults(t *testing.T) {
-	allowed, err := parseAllow(nil)
-	if err != nil || len(allowed) != 2 || allowed[0] != netip.MustParsePrefix("0.0.0.0/0") || allowed[1] != netip.MustParsePrefix("::/0") {
-		t.Fatalf("default IP policy must allow paired clients from either address family: %v, %v", allowed, err)
+func TestKeyCommand(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "id.pem")
+	var first, second bytes.Buffer
+	if err := runKey([]string{"-key", key}, &first); err != nil {
+		t.Fatal(err)
 	}
-	allowed, err = parseAllow([]string{"192.168.1.20"})
-	if err != nil || len(allowed) != 1 || allowed[0] != netip.MustParsePrefix("192.168.1.20/32") {
-		t.Fatalf("explicit allowlist must replace defaults: %v, %v", allowed, err)
+	if err := runKey([]string{"-key", key}, &second); err != nil {
+		t.Fatal(err)
+	}
+	line, _, _ := strings.Cut(first.String(), "\n")
+	if _, err := parseFingerprint(line); err != nil || first.String() != second.String() {
+		t.Fatalf("key output:\n%s\n%s", first.String(), second.String())
+	}
+}
+
+func TestProxyEnv(t *testing.T) {
+	env := proxyEnv([]string{"PATH=/bin", "https_proxy=http://old:1", "ALL_PROXY=socks://x",
+		"NO_PROXY=internal.example,localhost", "no_proxy=internal.example, 127.0.0.1", "TERM=xterm"}, "127.0.0.1:8888")
+	want := []string{
+		"PATH=/bin", "TERM=xterm",
+		"HTTP_PROXY=http://127.0.0.1:8888", "http_proxy=http://127.0.0.1:8888",
+		"HTTPS_PROXY=http://127.0.0.1:8888", "https_proxy=http://127.0.0.1:8888",
+		"NO_PROXY=internal.example,localhost,127.0.0.1,::1", "no_proxy=internal.example,localhost,127.0.0.1,::1",
+	}
+	if !slices.Equal(env, want) {
+		t.Fatalf("env:\n%v\nwant:\n%v", env, want)
 	}
 }

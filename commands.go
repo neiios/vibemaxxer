@@ -1,230 +1,138 @@
 package main
 
 import (
-	"bufio"
-	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
-	"os/signal"
-	"sort"
+	"os/exec"
+	"slices"
+	"strconv"
 	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 )
 
-func run(logger *slog.Logger, args []string) error {
-	if len(args) == 0 {
-		printCommands(os.Stdout)
-		return nil
-	}
-	switch args[0] {
-	case "serve":
-		return runServer(logger, args[1:])
-	case "bridge":
-		return runBridge(logger, args[1:])
-	case "pair-code":
-		return runPairCode(args[1:], os.Stdout)
-	case "pair":
-		return runPair(args[1:], os.Stdin, os.Stderr)
-	case "clients":
-		return runClients(args[1:], os.Stdout)
-	case "help", "-h", "-help", "--help":
-		printCommands(os.Stdout)
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q; use 'vibemaxxer help'", args[0])
-	}
+type repeatable []string
+
+func (r *repeatable) String() string { return strings.Join(*r, ",") }
+func (r *repeatable) Set(value string) error {
+	*r = append(*r, value)
+	return nil
 }
 
-func printCommands(out io.Writer) {
-	fmt.Fprintln(out, `Usage: vibemaxxer COMMAND [flags]
-
-  serve       Encrypted TLS 1.3 CONNECT server (VPN host)
-  pair-code   Create a single-use, 10-minute six-digit code (VPN host)
-  pair        Read a six-digit code from stdin and pair this workstation
-  bridge      Loopback HTTP proxy forwarding through paired TLS
-  clients     List or revoke paired workstations (VPN host)
-
-Use COMMAND -help for flags. Running without a command prints this help.
-Commands use ~/.config/vibemaxxer (or $XDG_CONFIG_HOME/vibemaxxer).
-Override this with -state-dir, consistently for commands on the same machine.`)
+func keyFlag(flags *flag.FlagSet) *string {
+	return flags.String("key", defaultKeyPath(), "Ed25519 identity file, created on first use")
 }
 
-func parseCommandFlags(flags *flag.FlagSet, args []string) error {
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 0 {
-		return errors.New("unexpected positional arguments; use -help")
+// validEndpoint accepts host:port with a nonzero port.
+func validEndpoint(address string) error {
+	host, portText, err := net.SplitHostPort(address)
+	port, portErr := strconv.Atoi(portText)
+	if err != nil || host == "" || portErr != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%q must be HOST:PORT", address)
 	}
 	return nil
 }
 
-func runPairCode(args []string, out io.Writer) error {
-	flags := flag.NewFlagSet("pair-code", flag.ContinueOnError)
-	dir := flags.String("state-dir", defaultStateDir(), "private configuration/identity directory")
-	ttl := flags.Duration("ttl", 10*time.Minute, "invitation lifetime (1m to 1h); replaces any previous invitation")
-	if err := parseCommandFlags(flags, args); err != nil {
+func runKey(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("key", flag.ContinueOnError)
+	keyPath := keyFlag(flags)
+	if err := parseNoArgs(flags, args); err != nil {
 		return err
 	}
-	store, err := openStore(*dir)
+	id, err := loadIdentity(*keyPath)
 	if err != nil {
 		return err
 	}
-	// Do not generate an identity for a server that has never been initialized.
-	state, err := store.readServer()
-	if err != nil {
-		return fmt.Errorf("start 'serve' with this state directory first: %w", err)
-	}
-	if _, err := loadIdentity(store); err != nil {
-		return err
-	}
-	code, err := makeInvitation(store, *ttl)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(out, "Server: %s\nCode: %s\n", state.Address, code)
-	return err
-}
-
-func runPair(args []string, input io.Reader, out io.Writer) error {
-	flags := flag.NewFlagSet("pair", flag.ContinueOnError)
-	dir := flags.String("state-dir", defaultStateDir(), "private configuration/identity directory")
-	hostname, _ := os.Hostname()
-	name := flags.String("name", hostname, "workstation name (letters, digits, dots, underscores, hyphens)")
-	replace := flags.Bool("replace", false, "explicitly replace this workstation's saved server")
-	server := flags.String("server", "", "server address from pair-code (HOST:PORT)")
-	serverKey := flags.String("server-key", "", "optional trusted SHA-256 server identity fingerprint")
-	if err := parseCommandFlags(flags, args); err != nil {
-		return err
-	}
-	if err := validEndpoint(*server); err != nil {
-		return fmt.Errorf("-server: %w", err)
-	}
-	if *serverKey != "" && !validFingerprint(*serverKey) {
-		return errors.New("invalid -server-key fingerprint")
-	}
-	fmt.Fprintln(out, "Enter the six-digit pairing code from your VPN host:")
-	line, err := bufio.NewReader(io.LimitReader(input, 8)).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	code := strings.TrimSuffix(line, "\n")
-	if !validPairCode(code) {
-		return errors.New("pairing code must be exactly six digits")
-	}
-	invite := invitation{Address: *server, ServerKey: *serverKey, Token: code}
-	store, err := openStore(*dir)
-	if err != nil {
-		return err
-	}
-	id, err := loadIdentity(store)
-	if err != nil {
-		return err
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := pair(ctx, store, id, invite, *name, *replace); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "Paired %s with %s. Run 'vibemaxxer bridge' with the same -state-dir.\n", *name, invite.Address)
+	fmt.Fprintf(out, "%s\n\nPass this on the other machine as -client-key (if this is the workstation)\nor -server-key (if this is the VPN host).\n", id.fingerprint())
 	return nil
 }
 
-func runClients(args []string, out io.Writer) error {
-	if len(args) == 0 || args[0] == "-help" || args[0] == "--help" {
-		fmt.Fprintln(out, "Usage: vibemaxxer clients list [-state-dir DIR]\n       vibemaxxer clients revoke [-state-dir DIR] NAME_OR_FULL_ID")
-		return nil
-	}
-	action := args[0]
-	flags := flag.NewFlagSet("clients "+action, flag.ContinueOnError)
-	dir := flags.String("state-dir", defaultStateDir(), "private server configuration/identity directory")
-	if err := flags.Parse(args[1:]); err != nil {
+func runServe(logger *slog.Logger, args []string) error {
+	var clientKeys repeatable
+	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+	listen := flags.String("listen", "", "LAN IP:PORT to listen on (required; keep it off the VPN interface)")
+	flags.Var(&clientKeys, "client-key", "fingerprint of an allowed workstation; repeatable")
+	portsFlag := flags.String("ports", "443", "comma-separated allowed destination ports")
+	keyPath := keyFlag(flags)
+	if err := parseNoArgs(flags, args); err != nil {
 		return err
 	}
-	if action != "list" && action != "revoke" || action == "list" && flags.NArg() != 0 || action == "revoke" && flags.NArg() != 1 {
-		return errors.New("use 'clients list' or 'clients revoke [-state-dir DIR] NAME_OR_FULL_ID'")
+	if *listen == "" {
+		return errors.New("-listen is required, e.g. -listen 192.168.1.50:8443")
 	}
-	store, err := openStore(*dir)
-	if err != nil {
-		return err
+	if len(clientKeys) == 0 {
+		return errors.New("at least one -client-key is required; run 'vibemaxxer key' on the workstation")
 	}
-	if action == "list" {
-		state, err := store.readServer()
+	clients := make(map[string]bool)
+	for _, value := range clientKeys {
+		key, err := parseFingerprint(value)
 		if err != nil {
-			return err
+			return fmt.Errorf("-client-key: %w", err)
 		}
-		ids := make([]string, 0, len(state.Clients))
-		for id := range state.Clients {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "IDENTITY (SHA-256)\tNAME\tPAIRED AT")
-		for _, id := range ids {
-			client := state.Clients[id]
-			fmt.Fprintf(writer, "%s\t%s\t%s\n", id, client.Name, client.AddedAt.Format(time.RFC3339))
-		}
-		return writer.Flush()
+		clients[key] = true
 	}
-	name := flags.Arg(0)
-	err = store.updateServer(func(state *serverState) error {
-		// Exact IDs take precedence over names. No ambiguous prefix matching.
-		if _, ok := state.Clients[name]; ok {
-			delete(state.Clients, name)
-			return nil
-		}
-		for id, client := range state.Clients {
-			if client.Name == name {
-				delete(state.Clients, id)
-				return nil
-			}
-		}
-		return errors.New("no such paired client")
-	})
-	if err == nil {
-		fmt.Fprintln(out, "Client revoked. New CONNECT requests are denied; active tunnels close within about one second.")
+	ports, err := parsePorts(*portsFlag)
+	if err != nil {
+		return err
 	}
-	return err
+	id, err := loadIdentity(*keyPath)
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return err
+	}
+	server := &http.Server{
+		Handler:           newProxy(ports, logger),
+		ReadHeaderTimeout: headerTimeout,
+		// Handshake failures are logged here, including unknown client fingerprints.
+		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
+	// Hijacking needs HTTP/1.1 on the outer hop. Tunneled traffic may be anything.
+	server.Protocols = new(http.Protocols)
+	server.Protocols.SetHTTP1(true)
+	logger.Info("serving", "address", listener.Addr(), "identity", id.fingerprint(), "ports", *portsFlag)
+	for key := range clients {
+		logger.Info("allowed client", "identity", key)
+	}
+	return server.Serve(tls.NewListener(listener, id.serverTLS(clients)))
 }
 
 func runBridge(logger *slog.Logger, args []string) error {
 	flags := flag.NewFlagSet("bridge", flag.ContinueOnError)
-	dir := flags.String("state-dir", defaultStateDir(), "private workstation configuration/identity directory")
-	listen := flags.String("listen", "127.0.0.1:8888", "loopback IP:port for agents (never a LAN address)")
-	dialTimeout := flags.Duration("dial-timeout", 10*time.Second, "upstream TCP and TLS handshake timeout")
-	maxTunnels := flags.Int("max-tunnels", 128, "maximum local connections, including pending handshakes")
-	blocklistPath := flags.String("blocklist", "", "static domain blocklist file (domains and their subdomains)")
-	if err := parseCommandFlags(flags, args); err != nil {
+	server := flags.String("server", "", "VPN host HOST:PORT (required)")
+	serverKey := flags.String("server-key", "", "fingerprint printed by 'vibemaxxer key' on the VPN host (required)")
+	listen := flags.String("listen", "127.0.0.1:8888", "loopback IP:PORT for agents")
+	blocklistPath := flags.String("blocklist", "", "file of domains to refuse, one per line, including subdomains")
+	keyPath := keyFlag(flags)
+	if err := parseNoArgs(flags, args); err != nil {
 		return err
 	}
-	bind, err := netip.ParseAddrPort(*listen)
-	if err != nil || !bind.Addr().IsLoopback() || bind.Addr().Zone() != "" || bind.Port() == 0 {
-		return errors.New("bridge -listen must be a literal loopback IP and nonzero port")
+	if err := validEndpoint(*server); err != nil {
+		return fmt.Errorf("-server %w", err)
 	}
-	if *dialTimeout <= 0 || *maxTunnels < 1 || *maxTunnels > 65536 {
-		return errors.New("-dial-timeout must be positive and -max-tunnels must be 1–65536")
+	key, err := parseFingerprint(*serverKey)
+	if err != nil {
+		return fmt.Errorf("-server-key: %w", err)
+	}
+	bind, err := netip.ParseAddrPort(*listen)
+	if err != nil || !bind.Addr().IsLoopback() || bind.Port() == 0 {
+		return errors.New("-listen must be a loopback IP:PORT such as 127.0.0.1:8888")
 	}
 	blocklist, err := loadBlocklist(*blocklistPath)
 	if err != nil {
 		return err
 	}
-	store, err := openStore(*dir)
-	if err != nil {
-		return err
-	}
-	config, err := store.readBridge()
-	if err != nil {
-		return fmt.Errorf("load bridge configuration (run 'pair' first): %w", err)
-	}
-	id, err := loadIdentity(store)
+	id, err := loadIdentity(*keyPath)
 	if err != nil {
 		return err
 	}
@@ -232,12 +140,74 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	logger.Info("bridge listening", "address", listener.Addr(), "encrypted_upstream", config.Address)
-	if blocklist != nil {
-		logger.Info("domain blocklist loaded", "path", *blocklistPath, "rules", len(blocklist))
+	b := &bridge{server: *server, tlsConfig: id.clientTLS(key), blocklist: blocklist, logger: logger}
+	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.fingerprint(), "server", *server, "blocklist_rules", len(blocklist))
+	b.probe()
+	return b.serve(listener)
+}
+
+var proxyVariables = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"}
+
+// proxyEnv returns environ with proxy variables pointing at the bridge.
+// Existing NO_PROXY entries are kept, deduplicated, and extended with loopback.
+func proxyEnv(environ []string, bridgeAddress string) []string {
+	var noProxy []string
+	env := make([]string, 0, len(environ)+6)
+	for _, entry := range environ {
+		name, value, _ := strings.Cut(entry, "=")
+		upper := strings.ToUpper(name)
+		if upper == "NO_PROXY" {
+			for _, item := range strings.Split(value, ",") {
+				if item = strings.TrimSpace(item); item != "" && !slices.Contains(noProxy, item) {
+					noProxy = append(noProxy, item)
+				}
+			}
+		}
+		if !slices.Contains(proxyVariables, upper) {
+			env = append(env, entry)
+		}
 	}
-	b := &bridge{config: config, identity: id, logger: logger, dialTimeout: *dialTimeout, maxTunnels: *maxTunnels, blocklist: blocklist}
-	return b.Serve(ctx, listener)
+	for _, item := range []string{"localhost", "127.0.0.1", "::1"} {
+		if !slices.Contains(noProxy, item) {
+			noProxy = append(noProxy, item)
+		}
+	}
+	url := "http://" + bridgeAddress
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY"} {
+		env = append(env, name+"="+url, strings.ToLower(name)+"="+url)
+	}
+	joined := strings.Join(noProxy, ",")
+	return append(env, "NO_PROXY="+joined, "no_proxy="+joined)
+}
+
+func runRun(args []string) error {
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	bridgeAddress := flags.String("bridge", "127.0.0.1:8888", "address of the running bridge")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	command := flags.Args()
+	if len(command) == 0 {
+		return errors.New("usage: vibemaxxer run [-bridge IP:PORT] -- COMMAND [ARGS...]")
+	}
+	conn, err := net.DialTimeout("tcp", *bridgeAddress, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("no bridge at %s; start 'vibemaxxer bridge' first", *bridgeAddress)
+	}
+	conn.Close()
+	path, err := exec.LookPath(command[0])
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(path, command, proxyEnv(os.Environ(), *bridgeAddress))
+}
+
+func parseNoArgs(flags *flag.FlagSet, args []string) error {
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected argument %q; see -help", flags.Arg(0))
+	}
+	return nil
 }

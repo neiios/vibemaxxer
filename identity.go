@@ -9,147 +9,188 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
-	"sync"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
-// Trust is attached to the public key, not a CA or a particular certificate.
-// Certificates are renewed automatically with the same persistent identity key.
+// identity is a machine's persistent Ed25519 key. Trust is pinned to the
+// SHA-256 fingerprint of the public key; the certificate is only the container
+// TLS requires and nothing about it is trusted.
 type identity struct {
 	key  ed25519.PrivateKey
-	mu   sync.Mutex
-	cert *tls.Certificate
+	cert tls.Certificate
 }
 
-func loadIdentity(store *stateStore) (*identity, error) {
-	key, err := store.identityKey()
+func defaultKeyPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "vibemaxxer", "identity.pem")
+}
+
+// loadIdentity reads the key at path, generating it on first use.
+func loadIdentity(path string) (*identity, error) {
+	if path == "" {
+		return nil, errors.New("cannot determine the configuration directory; pass -key FILE")
+	}
+	key, err := readKey(path)
+	if errors.Is(err, os.ErrNotExist) {
+		key, err = generateKey(path)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &identity{key: key}, nil
+	cert, err := selfSigned(key)
+	if err != nil {
+		return nil, err
+	}
+	return &identity{key: key, cert: cert}, nil
 }
 
-func fingerprint(spki []byte) string {
+func readKey(path string) (ed25519.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PRIVATE KEY" {
+		return nil, fmt.Errorf("%s: not a PEM private key", path)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	key, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("%s: key must be Ed25519", path)
+	}
+	return key, nil
+}
+
+func generateKey(path string) (ed25519.PrivateKey, error) {
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return nil, err
+	}
+	// O_EXCL never overwrites an identity that appeared concurrently.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if errors.Is(err, os.ErrExist) {
+		return readKey(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := pem.Encode(file, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return key, file.Close()
+}
+
+func selfSigned(key ed25519.PrivateKey) (tls.Certificate, error) {
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "vibemaxxer"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.AddDate(10, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+}
+
+func fingerprint(pub ed25519.PublicKey) string {
+	spki, _ := x509.MarshalPKIXPublicKey(pub)
 	sum := sha256.Sum256(spki)
 	return hex.EncodeToString(sum[:])
 }
 
 func (id *identity) fingerprint() string {
-	spki, _ := x509.MarshalPKIXPublicKey(id.key.Public())
-	return fingerprint(spki)
+	return fingerprint(id.key.Public().(ed25519.PublicKey))
 }
 
-func (id *identity) certificate() (*tls.Certificate, error) {
-	id.mu.Lock()
-	defer id.mu.Unlock()
-	now := time.Now()
-	if id.cert != nil && now.After(id.cert.Leaf.NotBefore) && now.Add(30*24*time.Hour).Before(id.cert.Leaf.NotAfter) {
-		return id.cert, nil
+// parseFingerprint normalizes a user-supplied fingerprint.
+func parseFingerprint(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size {
+		return "", fmt.Errorf("fingerprint %q must be 64 hex characters", value)
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, err
-	}
-	template := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "vibemaxxer"},
-		NotBefore: now.Add(-5 * time.Minute), NotAfter: now.Add(90 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, id.key.Public(), id.key)
-	if err != nil {
-		return nil, err
-	}
-	leaf, err := x509.ParseCertificate(der)
-	if err != nil {
-		return nil, err
-	}
-	id.cert = &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: id.key, Leaf: leaf}
-	return id.cert, nil
+	return value, nil
 }
 
-func peerIdentity(state tls.ConnectionState, usage x509.ExtKeyUsage) (string, error) {
-	if state.Version != tls.VersionTLS13 || len(state.PeerCertificates) != 1 {
-		return "", errors.New("TLS 1.3 and one identity certificate are required")
+// peerFingerprint identifies the authenticated peer. TLS 1.3 has already proven
+// possession of the presented key, so only the key itself matters.
+func peerFingerprint(state tls.ConnectionState) (string, error) {
+	if len(state.PeerCertificates) != 1 {
+		return "", errors.New("peer must present exactly one identity certificate")
 	}
-	cert := state.PeerCertificates[0]
-	if _, ok := cert.PublicKey.(ed25519.PublicKey); !ok {
+	pub, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	if !ok {
 		return "", errors.New("peer identity must be Ed25519")
 	}
-	now := time.Now()
-	if now.Before(cert.NotBefore) || !now.Before(cert.NotAfter) {
-		return "", errors.New("peer certificate is not currently valid; check system clocks")
-	}
-	if len(cert.UnhandledCriticalExtensions) != 0 || cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		return "", errors.New("invalid peer certificate constraints")
-	}
-	found := false
-	for _, value := range cert.ExtKeyUsage {
-		found = found || value == usage
-	}
-	if !found {
-		return "", errors.New("peer certificate has incorrect usage")
-	}
-	if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
-		return "", errors.New("peer identity certificate is not self-signed")
-	}
-	return fingerprint(cert.RawSubjectPublicKeyInfo), nil
+	return fingerprint(pub), nil
 }
 
+// clientTLS pins the server to one fingerprint. InsecureSkipVerify only
+// disables Web PKI; VerifyConnection replaces it with the pin.
 func (id *identity) clientTLS(serverKey string) *tls.Config {
 	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{"http/1.1"},
-		// Deliberately replace Web PKI/hostname validation with an out-of-band
-		// SHA-256 SPKI pin AND certificate checks. Never remove VerifyConnection.
+		MinVersion:         tls.VersionTLS13,
+		Certificates:       []tls.Certificate{id.cert},
 		InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
-			key, err := peerIdentity(state, x509.ExtKeyUsageServerAuth)
+			key, err := peerFingerprint(state)
 			if err != nil {
 				return err
 			}
-			if !validFingerprint(serverKey) || subtle.ConstantTimeCompare([]byte(key), []byte(serverKey)) != 1 {
-				return errors.New("server identity does not match pairing; refusing connection")
+			if subtle.ConstantTimeCompare([]byte(key), []byte(serverKey)) != 1 {
+				return fmt.Errorf("server identity %s does not match -server-key", key)
 			}
 			return nil
 		},
-		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return id.certificate()
-		},
 	}
 }
 
-func (id *identity) serverTLS(store *stateStore) *tls.Config {
+// serverTLS admits only the listed client fingerprints. Unknown clients fail
+// the handshake and are logged with the key to add.
+func (id *identity) serverTLS(clients map[string]bool) *tls.Config {
 	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{"http/1.1"},
-		ClientAuth: tls.RequireAnyClientCert,
-		// Each new connection must run current pairing/revocation checks.
-		SessionTicketsDisabled: true,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return id.certificate()
-		},
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{id.cert},
+		ClientAuth:   tls.RequireAnyClientCert,
 		VerifyConnection: func(state tls.ConnectionState) error {
-			key, err := peerIdentity(state, x509.ExtKeyUsageClientAuth)
+			key, err := peerFingerprint(state)
 			if err != nil {
 				return err
 			}
-			config, err := store.readServer()
-			if err != nil {
-				return errors.New("cannot read client authorization state")
+			if !clients[key] {
+				return fmt.Errorf("unknown client %s; add -client-key %s and restart", key, key)
 			}
-			if _, ok := config.Clients[key]; ok {
-				return nil
-			}
-			// During enrollment an unpaired identity may finish TLS, but the
-			// HTTP layer permits only token-authenticated POST /pair, not CONNECT.
-			if config.Pending != nil && time.Now().Before(config.Pending.ExpiresAt) {
-				return nil
-			}
-			return errors.New("client is not paired")
+			return nil
 		},
 	}
 }
