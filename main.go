@@ -12,6 +12,10 @@ import (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(logger, os.Args[1:]); err != nil && !errors.Is(err, flag.ErrHelp) {
+		var status commandExit
+		if errors.As(err, &status) {
+			os.Exit(status.code)
+		}
 		logger.Error("exiting", "error", err)
 		os.Exit(1)
 	}
@@ -23,6 +27,11 @@ func run(logger *slog.Logger, args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "_managed":
+		if len(args) != 2 {
+			return errors.New("internal managed invocation")
+		}
+		return runManaged(args[1])
 	case "key":
 		return runKey(args[1:], os.Stdout)
 	case "serve":

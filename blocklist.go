@@ -35,8 +35,15 @@ func loadDomainRules(path string) (domainRules, error) {
 		return nil, err
 	}
 	defer file.Close()
+	return scanDomainRules(path, bufio.NewScanner(file))
+}
+
+func parseDomainRules(path, data string) (domainRules, error) {
+	return scanDomainRules(path, bufio.NewScanner(strings.NewReader(data)))
+}
+
+func scanDomainRules(path string, scanner *bufio.Scanner) (domainRules, error) {
 	list := make(domainRules)
-	scanner := bufio.NewScanner(file)
 	for line := 1; scanner.Scan(); line++ {
 		text := strings.TrimSpace(scanner.Text())
 		if text == "" || strings.HasPrefix(text, "#") {

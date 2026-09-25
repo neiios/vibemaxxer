@@ -26,6 +26,12 @@ func TestFlagValidation(t *testing.T) {
 		{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key},
 		{"run"},
 		{"run", "-bridge", closed, "true"},
+		{"run", "-bridge", closed, "-server", "host:443", "--", "true"},
+		{"run", "-server-key", fp, "--", "true"},
+		{"run", "-blocklist", "missing", "--", "true"},
+		{"run", "-server", "host:443", "--", "true"},
+		{"run", "-server", "host:443", "-server-key", fp, "-listen", "0.0.0.0:0", "--", "true"},
+		{"run", "-server", "host:443", "-server-key", fp, "-grace", "0s", "--", "true"},
 		{"nonsense"},
 	} {
 		if err := run(logger, args); err == nil {

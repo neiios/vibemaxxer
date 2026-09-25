@@ -28,20 +28,40 @@ vibemaxxer serve -listen 192.168.1.50:8443 -client-key WORKSTATION_FP
 
 Bind the LAN address, not `0.0.0.0`, so the listener stays off the tunnel interface. Repeat `-client-key` per workstation. Remove one and restart to revoke it. If a workstation connects before its key is listed, the server logs the fingerprint with the exact flag to add.
 
-Workstation:
+Workstation (on-demand shared bridge, no persistent service):
+
+```sh
+vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP -- claude
+# In another terminal, the same settings reuse the same bridge:
+vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP -- codex
+```
+
+The first session starts a detached bridge on a free loopback port. Each `run` prints its address and private log path. The bridge stops three seconds after the last session exits. `run` supervises the command and sets `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lowercase forms. Commands keep their terminal and exit status.
+
+Alternatively, manage the bridge yourself (existing behavior, unchanged):
 
 ```sh
 vibemaxxer bridge -server 192.168.1.50:8443 -server-key HOST_FP
-vibemaxxer run -- claude
+vibemaxxer run -bridge 127.0.0.1:8888 -- claude
 ```
 
-The bridge listens on `127.0.0.1:8888` and checks the server at startup. The log says whether the pin matched, the identity was accepted, or the server was unreachable. `run` sets `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lowercase forms, then execs the command.
+The external bridge defaults to `127.0.0.1:8888`; external `run` checks its TCP listener then execs the command. Omitting both `-server` and `-bridge` retains this mode. Both bridge modes check the upstream and log pin, identity or reachability failures. Readiness means the local listener is available, not that the VPN host accepted the identity: upstream failures are logged and retried per connection, never silently routed directly.
 
 Check the exit IP:
 
 ```sh
 vibemaxxer run -- curl https://api.ipify.org
 ```
+
+### Managed configuration
+
+```sh
+vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP \
+  -blocklist blocked-domains.txt -proxy-domains proxy-domains.txt \
+  -direct-ports 443,8443 -- pi
+```
+
+Managed `run` also accepts `-key`, `-listen` (default `127.0.0.1:0`, a free port), `-grace` (default `3s`), `-startup-timeout` (default `15s`), and `-runtime-dir` (default `/tmp/vibemaxxer-UID`). Grace and startup timeout must be between `100ms` and `1m`. Managed flags require `-server` and `-server-key`; they cannot be combined with `-bridge`. Use the same flags across sessions to share. An explicit occupied port fails startup; an existing listener is never adopted.
 
 ### Blocklist
 
@@ -72,7 +92,7 @@ Applications still use the local bridge for both routes; this does not add suppo
 | `key` | Print this machine's fingerprint |
 | `serve` | CONNECT server on the VPN host |
 | `bridge` | Loopback proxy on the workstation |
-| `run` | Exec a command with proxy variables set |
+| `run` | Run a command with proxy variables; optionally manage a shared bridge |
 
 | Flag | Command | Default | Meaning |
 | --- | --- | --- | --- |
@@ -86,7 +106,13 @@ Applications still use the local bridge for both routes; this does not add suppo
 | `-blocklist` | bridge | none | Domain blocklist file |
 | `-proxy-domains` | bridge | none (proxy all) | Route only these domains through the server |
 | `-direct-ports` | bridge | `443` | Allowed destination ports for direct routes |
-| `-bridge` | run | `127.0.0.1:8888` | Bridge address |
+| `-bridge` | run (external) | `127.0.0.1:8888` | Existing bridge address; exec mode |
+| `-server`, `-server-key` | run (managed) | required | Enable on-demand mode; same meaning as bridge |
+| `-blocklist`, `-proxy-domains`, `-direct-ports` | run (managed) | as above | Snapshot routing configuration |
+| `-listen` | run (managed) | `127.0.0.1:0` | Loopback listener, automatic free port |
+| `-grace` | run (managed) | `3s` | Idle shutdown delay |
+| `-startup-timeout` | run (managed) | `15s` | Bounded lock/readiness wait |
+| `-runtime-dir` | run (managed) | `/tmp/vibemaxxer-UID` | Private owner-only runtime directory |
 
 Fixed: 10-second dial and header timeouts, 256 tunnels per process. Private, loopback, link-local, and CGNAT destinations are refused after DNS resolution, so a tunnel cannot reach the VPN host's LAN.
 
@@ -99,6 +125,17 @@ Fixed: 10-second dial and header timeouts, 256 tunnels per process. Private, loo
 - **Cursor CLI**: `vibemaxxer run -- agent`.
 
 To confirm a client is proxied, make a model request and watch for `tunnel opened` in the server log. Stop the bridge and the same request must fail.
+
+## Managed bridge architecture and limits
+
+- A configuration hash includes the server address/pin, actual identity key, listen address, direct ports, grace, **domain file bytes**, and executable contents. File paths alone are not keys. Absent and empty selective-routing files differ. Identical contents at different paths can share. Binary upgrades, identity replacement or rule edits create separate bridges; existing sessions retain their original snapshots. Edits are not hot-reloaded. Fixed listen ports cannot host two configurations simultaneously.
+- Per-configuration Linux `flock` locks serialize startup and protect shutdown versus lease registration. A separate inherited lifetime lock reserves ownership even before readiness; stale sockets are recovered only by its owner. No PID counters or PID-based cleanup. Lock files are deliberately never unlinked, avoiding split-lock races.
+- Every supervisor holds a live control Unix connection for the command's lifetime. Registration occurs under the same gate used by idle shutdown. EOF releases the lease. New leases during grace keep the bridge alive. Control descriptors are close-on-exec and are not passed to commands or their descendants.
+- The daemon starts a new session with `/dev/null` stdin and private log stdout/stderr, independent of the first supervisor's terminal, pipes or lifetime. An unlinked private configuration snapshot is passed by descriptor. The runtime directory must be owned by the user, mode `0700`, with safe non-symlink ancestors. Control sockets and log/lock files are owner-validated and mode `0600`; control peers are UID-checked. Symlinks, hardlinked state files and unsafe existing files are refused. Same-UID processes are trusted.
+- Logs persist after shutdown, including block rule diagnostics and upstream failures. They are not rotated automatically. Inspect the printed `.log` path; remove old logs yourself. Do not delete runtime state or its lock files while sessions/launchers are active. There is no always-running manager or persistent service.
+- Startup lock/readiness waits are bounded. Local file reads and executable hashing precede that wait. A launcher that times out may leave an already-starting daemon, which exits after its idle grace. A bridge crash is reported to live supervisors; it is **not** transparently restarted for existing commands. VPN requests fail rather than fall back directly. A later new session can recover stale state and start a new bridge.
+- If a supervisor is killed (including SIGKILL), its lease closes even if its command survives. Commands that daemonize or leave background children do not extend the lease: tracking is by direct supervised session, not descendant process trees. Those children may lose proxy access after grace. Similarly, stopping a supervisor with job control retains its lease until it resumes/exits. No automatic child-tree cleanup is attempted.
+- Commands share the supervisor's foreground process group and inherit real terminal descriptors (no PTY emulation). Terminal input, resizing and shell job control remain available. INT/QUIT/TERM/HUP delivered to the supervisor are forwarded to its immediate command; terminal group INT/QUIT can also reach the command directly, so custom signal handlers should tolerate duplicate delivery. Exit codes are preserved; signal exits use `128 + signal`. Background descendants are not independently supervised. On bridge loss, the command remains running with a warning so users can save work.
 
 ## Security
 
@@ -137,5 +174,5 @@ systemd-run --user --unit=vibemaxxer-bridge --property=Restart=on-failure \
 ```sh
 gofmt -l .
 go vet ./...
-go test -race -count=1 -timeout=60s ./...
+go test -race -count=1 -timeout=120s ./...
 ```

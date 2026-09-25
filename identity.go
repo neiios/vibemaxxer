@@ -82,18 +82,25 @@ func generateKey(path string) (ed25519.PrivateKey, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if errors.Is(err, os.ErrExist) {
-		return readKey(path)
-	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".identity-*")
 	if err != nil {
 		return nil, err
 	}
+	defer os.Remove(file.Name())
 	if err := pem.Encode(file, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
 		file.Close()
 		return nil, err
 	}
-	return key, file.Close()
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	// Publish only a complete key; simultaneous first runs converge on one identity.
+	if err := os.Link(file.Name(), path); errors.Is(err, os.ErrExist) {
+		return readKey(path)
+	} else if err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 func selfSigned(key ed25519.PrivateKey) (tls.Certificate, error) {

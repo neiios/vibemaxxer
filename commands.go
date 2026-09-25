@@ -188,13 +188,50 @@ func proxyEnv(environ []string, bridgeAddress string) []string {
 
 func runRun(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	bridgeAddress := flags.String("bridge", "127.0.0.1:8888", "address of the running bridge")
+	bridgeAddress := flags.String("bridge", "127.0.0.1:8888", "address of the running bridge (external mode)")
+	server := flags.String("server", "", "VPN server; enables on-demand managed mode")
+	pin := flags.String("server-key", "", "pinned VPN server fingerprint")
+	listen := flags.String("listen", "127.0.0.1:0", "managed loopback listener; 0 chooses a free port")
+	block := flags.String("blocklist", "", "domain blocklist file")
+	domains := flags.String("proxy-domains", "", "selective VPN domain file")
+	ports := flags.String("direct-ports", "443", "allowed direct destination ports")
+	key := keyFlag(flags)
+	runtime := flags.String("runtime-dir", "", "private managed runtime directory (default /tmp/vibemaxxer-UID)")
+	grace := flags.Duration("grace", 3*time.Second, "managed idle shutdown grace")
+	timeout := flags.Duration("startup-timeout", 15*time.Second, "maximum managed startup wait")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	command := flags.Args()
 	if len(command) == 0 {
 		return errors.New("usage: vibemaxxer run [-bridge IP:PORT] -- COMMAND [ARGS...]")
+	}
+	explicitBridge, managedFlags := false, false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "bridge" {
+			explicitBridge = true
+		} else {
+			managedFlags = true
+		}
+	})
+	if *server != "" {
+		if explicitBridge {
+			return errors.New("-bridge cannot be combined with managed mode flags")
+		}
+		c, err := managedSnapshot(*server, *pin, *listen, *key, *block, *domains, *ports, *grace)
+		if err != nil {
+			return err
+		}
+		lease, err := acquireBridge(c, *runtime, *timeout)
+		if err != nil {
+			return err
+		}
+		defer lease.Close()
+		fmt.Fprintf(os.Stderr, "vibemaxxer: bridge %s; log: %s\n", lease.Address, lease.Log)
+		return supervise(command, lease)
+	}
+	if managedFlags {
+		return errors.New("managed flags require -server and -server-key")
 	}
 	conn, err := net.DialTimeout("tcp", *bridgeAddress, 2*time.Second)
 	if err != nil {
