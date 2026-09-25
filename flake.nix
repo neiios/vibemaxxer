@@ -31,6 +31,12 @@
               "-w"
             ];
             doCheck = true;
+            # Some Nix sandboxes have writable / or /tmp ancestors. Runtime
+            # integration tests skip only when the production safety check
+            # rejects that environment; run the full suite outside the sandbox.
+            preCheck = ''
+              export VIBEMAXXER_TEST_NIX_SANDBOX=1
+            '';
             meta = {
               description = "HTTP CONNECT proxy over pinned mutual TLS for coding agents";
               homepage = "https://github.com/neiios/vibemaxxer";

@@ -70,11 +70,16 @@ func TestMain(m *testing.M) {
 
 func managedFixture(t *testing.T) (managedConfig, string) {
 	t.Helper()
-	root, err := os.MkdirTemp("/tmp", "vmx-test-")
+	root, err := os.MkdirTemp("", "vmx-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
+	if os.Getenv("VIBEMAXXER_TEST_NIX_SANDBOX") == "1" {
+		if _, err := privateRuntime(root); err != nil {
+			t.Skipf("Nix sandbox cannot provide a trusted runtime ancestry: %v", err)
+		}
+	}
 	key := filepath.Join(root, "identity.pem")
 	server, _ := closedPort(t)
 	c, err := managedSnapshot(server, strings.Repeat("ab", 32), "127.0.0.1:0", key, "", "", "443", 200*time.Millisecond)
