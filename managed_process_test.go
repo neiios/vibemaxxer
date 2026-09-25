@@ -46,8 +46,6 @@ func TestManagedIndependentLaunchers(t *testing.T) {
 	if first != second {
 		t.Fatalf("independent launchers not sharing: %s %s", first, second)
 	}
-	// Kill the first supervisor, leaving its child alive. The second session must
-	// still work, independent of the launcher's process group, stdio and lifetime.
 	cmds[0].Process.Kill()
 	cmds[0].Wait()
 	time.Sleep(2 * c.Grace)

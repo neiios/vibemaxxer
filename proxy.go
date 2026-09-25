@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -26,6 +27,7 @@ type proxy struct {
 	logger       *slog.Logger
 	slots        chan struct{}
 	allowPrivate bool
+	local        []netip.Prefix
 }
 
 func newProxy(ports map[int]bool, logger *slog.Logger) *proxy {
@@ -52,6 +54,41 @@ func publicDestination(addr netip.Addr) bool {
 		!addr.IsLinkLocalUnicast() && !sharedAddressSpace.Contains(addr)
 }
 
+func localPrefixes() ([]netip.Prefix, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	var prefixes []netip.Prefix
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr.String())
+		if err != nil {
+			return nil, err
+		}
+		prefixes = append(prefixes, prefix.Masked())
+	}
+	return prefixes, nil
+}
+
+func (p *proxy) refuseLocalPrefixes() error {
+	var err error
+	p.local, err = localPrefixes()
+	return err
+}
+
+func (p *proxy) allowed(addr netip.Addr) bool {
+	addr = addr.Unmap().WithZone("")
+	if !publicDestination(addr) {
+		return false
+	}
+	for _, prefix := range p.local {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
 var errPrivateDestination = errors.New("private/local destination blocked")
 
 func (p *proxy) dial(ctx context.Context, target string) (net.Conn, error) {
@@ -59,7 +96,7 @@ func (p *proxy) dial(ctx context.Context, target string) (net.Conn, error) {
 	if !p.allowPrivate {
 		dialer.ControlContext = func(_ context.Context, _, address string, _ syscall.RawConn) error {
 			endpoint, err := netip.ParseAddrPort(address)
-			if err != nil || !publicDestination(endpoint.Addr()) {
+			if err != nil || !p.allowed(endpoint.Addr()) {
 				return errPrivateDestination
 			}
 			return nil
@@ -128,22 +165,29 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func pipe(a net.Conn, aReader io.Reader, b net.Conn, bReader io.Reader) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		if _, err := io.Copy(b, aReader); err != nil {
-			a.Close()
-			b.Close()
-			return
-		}
-		if cw, ok := b.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	}()
-	_, _ = io.Copy(a, bReader)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go pipeOneWay(&wg, b, aReader, a)
+	go pipeOneWay(&wg, a, bReader, b)
+	wg.Wait()
 	a.Close()
 	b.Close()
-	<-done
+}
+
+func pipeOneWay(wg *sync.WaitGroup, dst net.Conn, src io.Reader, srcConn net.Conn) {
+	defer wg.Done()
+	_, err := io.Copy(dst, src)
+	if err == nil {
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			err = cw.CloseWrite()
+		} else {
+			err = errors.ErrUnsupported
+		}
+	}
+	if err != nil {
+		dst.Close()
+		srcConn.Close()
+	}
 }
 
 func parsePorts(value string) (map[int]bool, error) {

@@ -19,6 +19,9 @@ func TestFlagValidation(t *testing.T) {
 		{"serve", "-listen", "127.0.0.1:0", "-client-key", "nothex"},
 		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "-ports", "https"},
 		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "extra"},
+		{"serve", "-listen", "0.0.0.0:0", "-client-key", fp, "-key", key},
+		{"serve", "-listen", ":0", "-client-key", fp, "-key", key},
+		{"serve", "-listen", "[::]:0", "-client-key", fp, "-key", key},
 		{"bridge"},
 		{"bridge", "-server", "host", "-server-key", fp},
 		{"bridge", "-server", "host:8443", "-server-key", "short"},
@@ -36,6 +39,28 @@ func TestFlagValidation(t *testing.T) {
 	} {
 		if err := run(logger, args); err == nil {
 			t.Errorf("%v: accepted", args)
+		}
+	}
+}
+
+func TestErrorsNameFlags(t *testing.T) {
+	logger, _ := testLogger()
+	key := filepath.Join(t.TempDir(), "id.pem")
+	fp := strings.Repeat("ab", 32)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"run", "-server", "host", "-server-key", fp, "--", "true"}, "-server"},
+		{[]string{"run", "-server", "host:443", "-server-key", "short", "--", "true"}, "-server-key"},
+		{[]string{"run", "-server", "host:443", "-server-key", fp, "-direct-ports", "https", "--", "true"}, "-direct-ports"},
+		{[]string{"run", "-server", "host:443", "-server-key", fp, "-blocklist", "/nonexistent", "--", "true"}, "-blocklist"},
+		{[]string{"run", "-server", "host:443", "-server-key", fp, "-proxy-domains", "/nonexistent", "--", "true"}, "-proxy-domains"},
+		{[]string{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key}, "-blocklist"},
+	} {
+		err := run(logger, tc.args)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
 		}
 	}
 }

@@ -3,13 +3,13 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 )
 
 type domainRules map[string]bool
 
-// Keep the blocklist name for existing callers.
 type domainBlocklist = domainRules
 
 func normalizeDomain(name string) string {
@@ -17,7 +17,13 @@ func normalizeDomain(name string) string {
 }
 
 func validDomainRule(name string) bool {
-	return name != "" && strings.IndexFunc(name, func(r rune) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
+	if _, err := netip.ParseAddr(name); err == nil {
+		return false
+	}
+	return strings.IndexFunc(name, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.')
 	}) < 0
 }
@@ -51,7 +57,7 @@ func scanDomainRules(path string, scanner *bufio.Scanner) (domainRules, error) {
 		}
 		name := normalizeDomain(text)
 		if !validDomainRule(name) {
-			return nil, fmt.Errorf("%s:%d: %q is not a domain (use one ASCII/punycode domain per line)", path, line, text)
+			return nil, fmt.Errorf("%s:%d: %q is not a domain rule (write example.com to cover it and its subdomains; no leading dot, no IP literals)", path, line, text)
 		}
 		list[name] = true
 	}

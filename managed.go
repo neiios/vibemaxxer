@@ -1,7 +1,5 @@
 package main
 
-// Linux-only managed bridges. Lock files are permanent: unlinking a flock inode
-// would allow two independent owners. No PID files or process-name probing.
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -29,7 +27,7 @@ type managedConfig struct {
 	BlockContents, DomainContents []byte
 	Ports                         map[int]bool
 	Grace                         time.Duration
-	Executable                    string // hash of the actual executable, not a mutable version label
+	Executable                    string
 }
 
 func (c managedConfig) digest() string {
@@ -41,11 +39,11 @@ func (c managedConfig) digest() string {
 func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports string, grace time.Duration) (managedConfig, error) {
 	c := managedConfig{Server: server, Listen: listen, Grace: grace}
 	if err := validEndpoint(server); err != nil {
-		return c, err
+		return c, fmt.Errorf("-server %w", err)
 	}
 	var err error
 	if c.ServerKey, err = parseFingerprint(pin); err != nil {
-		return c, err
+		return c, fmt.Errorf("-server-key: %w", err)
 	}
 	bind, err := netip.ParseAddrPort(listen)
 	if err != nil || !bind.Addr().IsLoopback() {
@@ -55,14 +53,13 @@ func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports 
 		return c, errors.New("-grace must be between 100ms and 1m")
 	}
 	if c.Ports, err = parsePorts(ports); err != nil {
-		return c, err
+		return c, fmt.Errorf("-direct-ports: %w", err)
 	}
-	// Parse the same bytes that participate in the configuration key.
 	if c.Block, c.BlockContents, err = snapshotRules(blockPath); err != nil {
-		return c, err
+		return c, fmt.Errorf("-blocklist: %w", err)
 	}
 	if c.Domains, c.DomainContents, err = snapshotRules(domainPath); err != nil {
-		return c, err
+		return c, fmt.Errorf("-proxy-domains: %w", err)
 	}
 	id, err := loadIdentity(keyPath)
 	if err != nil {
@@ -97,12 +94,14 @@ func snapshotRules(path string) (domainRules, []byte, error) {
 func privateRuntime(path string) (string, error) {
 	if path == "" {
 		path = filepath.Join("/tmp", "vibemaxxer-"+strconv.Itoa(os.Getuid()))
+		if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+			path = filepath.Join(dir, "vibemaxxer")
+		}
 	}
 	if !filepath.IsAbs(path) {
 		return "", errors.New("-runtime-dir must be absolute")
 	}
 	path = filepath.Clean(path)
-	// Check every ancestor without following symlinks. A sticky shared /tmp is OK.
 	for p := filepath.Dir(path); ; p = filepath.Dir(p) {
 		st, err := os.Lstat(p)
 		if err != nil {
@@ -185,7 +184,6 @@ func connectLease(socket, logPath string, deadline time.Time) (*bridgeLease, err
 	if err != nil {
 		return nil, err
 	}
-	// Authenticate peer as well as pathname. Go's network descriptors are CLOEXEC.
 	raw, err := conn.(*net.UnixConn).SyscallConn()
 	var cred *syscall.Ucred
 	if err == nil {
@@ -248,7 +246,6 @@ func acquireBridge(c managedConfig, runtime string, timeout time.Duration) (*bri
 			}
 			launched = true
 			err = launchManaged(c, base, owner)
-			// Do not LOCK_UN: the child inherits the same open file description.
 			owner.Close()
 			if err != nil {
 				return nil, err
@@ -270,7 +267,6 @@ func launchManaged(c managedConfig, base string, owner *os.File) error {
 		return err
 	}
 	defer logFile.Close()
-	// O_APPEND on the shared open description used for stdout and stderr.
 	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, logFile.Fd(), syscall.F_SETFL, syscall.O_APPEND); errno != 0 {
 		return errno
 	}
@@ -288,9 +284,9 @@ func launchManaged(c managedConfig, base string, owner *os.File) error {
 	if _, err = snapshot.Seek(0, 0); err != nil {
 		return err
 	}
-	// /proc/self/exe prevents a binary replacement between hashing and exec.
 	cmd := exec.Command("/proc/self/exe", "_managed", base)
 	cmd.ExtraFiles = []*os.File{owner, snapshot}
+	cmd.Dir = "/"
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
@@ -339,12 +335,15 @@ func runManaged(base string) error {
 		return err
 	}
 	id := &identity{key: ed25519.PrivateKey(c.Key), cert: cert}
+	direct := newProxy(c.Ports, logger)
+	if err := direct.refuseLocalPrefixes(); err != nil {
+		return err
+	}
 	tcp, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return err
 	}
 	defer tcp.Close()
-	// The lifetime owner lock makes a leftover socket safe to remove.
 	if st, err := os.Lstat(base + ".sock"); err == nil {
 		if st.Mode()&os.ModeSocket == 0 || st.Sys().(*syscall.Stat_t).Uid != uint32(os.Getuid()) {
 			return errors.New("unsafe stale control socket")
@@ -355,7 +354,7 @@ func runManaged(base string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	syscall.Umask(0177) // publish the socket with private permissions from creation
+	syscall.Umask(0177)
 	control, err := net.ListenUnix("unix", &net.UnixAddr{Name: base + ".sock", Net: "unix"})
 	if err != nil {
 		return err
@@ -364,14 +363,12 @@ func runManaged(base string) error {
 	if err := os.Chmod(base+".sock", 0600); err != nil {
 		return err
 	}
-	b := &bridge{server: c.Server, tlsConfig: id.clientTLS(c.ServerKey), blocklist: c.Block, proxyDomains: c.Domains, direct: newProxy(c.Ports, logger), logger: logger}
-	logger.Info("managed bridge listening", "address", tcp.Addr(), "log", base+".log")
+	b := &bridge{server: c.Server, tlsConfig: id.clientTLS(c.ServerKey), blocklist: c.Block, proxyDomains: c.Domains, direct: direct, logger: logger}
+	logger.Info("managed bridge listening", "address", tcp.Addr(), "log", base+".log", "local_prefixes", direct.local)
 	go b.probe()
 	return serveManaged(control, tcp, b, base+".lock", c.Grace)
 }
 
-// Shutdown holds the same gate as acquisition, then tests leases under mu.
-// Thus a successful registration and the last-lease shutdown cannot cross.
 func serveManaged(control *net.UnixListener, tcp net.Listener, b *bridge, gatePath string, grace time.Duration) error {
 	var mu sync.Mutex
 	count := 0
@@ -408,7 +405,6 @@ func serveManaged(control *net.UnixListener, tcp net.Listener, b *bridge, gatePa
 				if err := json.NewEncoder(conn).Encode(tcp.Addr().String()); err != nil {
 					return
 				}
-				// EOF is lease release; no heartbeats or PID reuse hazards.
 				_, _ = io.Copy(io.Discard, conn)
 			}()
 		}

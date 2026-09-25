@@ -67,6 +67,10 @@ func runServe(logger *slog.Logger, args []string) error {
 	if *listen == "" {
 		return errors.New("-listen is required, e.g. -listen 192.168.1.50:8443")
 	}
+	bind, err := netip.ParseAddrPort(*listen)
+	if err != nil || bind.Addr().IsUnspecified() {
+		return errors.New("-listen must be a specific LAN IP:PORT such as 192.168.1.50:8443, never a wildcard")
+	}
 	if len(clientKeys) == 0 {
 		return errors.New("at least one -client-key is required; run 'vibemaxxer key' on the workstation")
 	}
@@ -86,18 +90,22 @@ func runServe(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", *listen)
+	handler := newProxy(ports, logger)
+	if err := handler.refuseLocalPrefixes(); err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", bind.String())
 	if err != nil {
 		return err
 	}
 	server := &http.Server{
-		Handler:           newProxy(ports, logger),
+		Handler:           handler,
 		ReadHeaderTimeout: headerTimeout,
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
 	server.Protocols = new(http.Protocols)
 	server.Protocols.SetHTTP1(true)
-	logger.Info("serving", "address", listener.Addr(), "identity", id.fingerprint(), "ports", *portsFlag)
+	logger.Info("serving", "address", listener.Addr(), "identity", id.fingerprint(), "ports", *portsFlag, "local_prefixes", handler.local)
 	for key := range clients {
 		logger.Info("allowed client", "identity", key)
 	}
@@ -137,10 +145,14 @@ func runBridge(logger *slog.Logger, args []string) error {
 	}
 	blocklist, err := loadBlocklist(*blocklistPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("-blocklist: %w", err)
 	}
 	id, err := loadIdentity(*keyPath)
 	if err != nil {
+		return err
+	}
+	direct := newProxy(directPorts, logger)
+	if err := direct.refuseLocalPrefixes(); err != nil {
 		return err
 	}
 	listener, err := net.Listen("tcp", bind.String())
@@ -148,9 +160,9 @@ func runBridge(logger *slog.Logger, args []string) error {
 		return err
 	}
 	b := &bridge{server: *server, tlsConfig: id.clientTLS(key), blocklist: blocklist,
-		proxyDomains: proxyDomains, direct: newProxy(directPorts, logger), logger: logger}
-	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.fingerprint(), "server", *server, "blocklist_rules", len(blocklist))
-	b.probe()
+		proxyDomains: proxyDomains, direct: direct, logger: logger}
+	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.fingerprint(), "server", *server, "blocklist_rules", len(blocklist), "local_prefixes", direct.local)
+	go b.probe()
 	return b.serve(listener)
 }
 
@@ -196,7 +208,7 @@ func runRun(args []string) error {
 	domains := flags.String("proxy-domains", "", "selective VPN domain file")
 	ports := flags.String("direct-ports", "443", "allowed direct destination ports")
 	key := keyFlag(flags)
-	runtime := flags.String("runtime-dir", "", "private managed runtime directory (default /tmp/vibemaxxer-UID)")
+	runtime := flags.String("runtime-dir", "", "private managed runtime directory (default $XDG_RUNTIME_DIR/vibemaxxer, or /tmp/vibemaxxer-UID when unset)")
 	grace := flags.Duration("grace", 3*time.Second, "managed idle shutdown grace")
 	timeout := flags.Duration("startup-timeout", 15*time.Second, "maximum managed startup wait")
 	if err := flags.Parse(args); err != nil {

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"crypto/tls"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testBridge(t *testing.T, serverAddress string, serverKey string, list domainBlocklist) (address string, logs *logBuffer) {
@@ -105,5 +108,45 @@ func TestProbeDistinguishesOutcomes(t *testing.T) {
 		if !strings.Contains(logs.String(), c.want) {
 			t.Errorf("%s: want %q in log:\n%s", c.name, c.want, logs.String())
 		}
+	}
+}
+
+func TestBridgeBoundsUpstreamReply(t *testing.T) {
+	saved := upstreamReplyTimeout
+	upstreamReplyTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { upstreamReplyTimeout = saved })
+	server, client := testIdentity(t), testIdentity(t)
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	listener := tls.NewListener(raw, server.serverTLS(map[string]bool{client.fingerprint(): true}))
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if err := conn.(*tls.Conn).Handshake(); err != nil {
+			return
+		}
+		_, _ = conn.Read(make([]byte, 1024))
+		<-done
+	}()
+	logger, logs := testLogger()
+	address := startBridge(t, &bridge{server: raw.Addr().String(), tlsConfig: client.clientTLS(server.fingerprint()), logger: logger})
+	started := time.Now()
+	_, _, status := connect(t, address, nil, connectRequest("example.com:443"), "")
+	if status != http.StatusGatewayTimeout {
+		t.Fatalf("status %d", status)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("bridge waited %v for the upstream reply", elapsed)
+	}
+	if !strings.Contains(logs.String(), "did not answer") {
+		t.Fatalf("timeout not logged:\n%s", logs.String())
 	}
 }

@@ -2,10 +2,13 @@ package main
 
 import (
 	"crypto/tls"
+	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func testServer(t *testing.T, allowPrivate bool, ports ...int) (address string, config *tls.Config) {
@@ -87,4 +90,91 @@ func TestParsePorts(t *testing.T) {
 			t.Errorf("accepted %q", bad)
 		}
 	}
+}
+
+func TestTunnelUpstreamHalfClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	received := make(chan string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		first := make([]byte, 4)
+		if _, err := io.ReadFull(conn, first); err != nil {
+			received <- err.Error()
+			return
+		}
+		if _, err := io.WriteString(conn, "pong"); err != nil {
+			received <- err.Error()
+			return
+		}
+		if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+			received <- err.Error()
+			return
+		}
+		rest, _ := io.ReadAll(conn)
+		received <- string(first) + string(rest)
+	}()
+	port := listener.Addr().(*net.TCPAddr).Port
+	address, config := testServer(t, true, port)
+	conn, reader, status := connect(t, address, config, connectRequest(listener.Addr().String()), "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	if _, err := io.WriteString(conn, "ping"); err != nil {
+		t.Fatal(err)
+	}
+	pong := make([]byte, 4)
+	if _, err := io.ReadFull(reader, pong); err != nil || string(pong) != "pong" {
+		t.Fatalf("reply %q, %v", pong, err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, err := io.WriteString(conn, "late"); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*tls.Conn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if rest, err := io.ReadAll(reader); err != nil || len(rest) != 0 {
+		t.Fatalf("trailing data %q, %v", rest, err)
+	}
+	select {
+	case got := <-received:
+		if got != "pinglate" {
+			t.Fatalf("target received %q, want %q", got, "pinglate")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("target never saw EOF")
+	}
+}
+
+func TestLocalPrefixesRefused(t *testing.T) {
+	p := &proxy{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
+	for addr, want := range map[string]bool{
+		"2001:db8:1::10": false, "203.0.113.7": false,
+		"2001:db8:2::10": true, "1.1.1.1": true,
+		"10.0.0.1": false, "::1": false,
+		"2001:db8:1::10%eth0": false, "fe80::1%eth0": false,
+	} {
+		if got := p.allowed(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("%s: allowed=%v", addr, got)
+		}
+	}
+	prefixes, err := localPrefixes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback := netip.MustParseAddr("127.0.0.1")
+	for _, prefix := range prefixes {
+		if prefix.Contains(loopback) {
+			return
+		}
+	}
+	t.Fatalf("loopback missing from %v", prefixes)
 }

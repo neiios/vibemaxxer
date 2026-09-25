@@ -78,7 +78,7 @@ func TestRoutingRestrictions(t *testing.T) {
 		target string
 		status int
 	}{
-		{"localhost:443", http.StatusBadGateway}, // must not fall back to direct (which would return 403)
+		{"localhost:443", http.StatusBadGateway},
 		{"blocked.example:443", http.StatusForbidden},
 		{"127.0.0.1:443", http.StatusForbidden},
 		{"127.0.0.1:22", http.StatusForbidden},
@@ -96,7 +96,6 @@ func TestMatchedDomainUsesServer(t *testing.T) {
 	upstream := startServer(t, server, map[string]bool{client.fingerprint(): true}, map[int]bool{port: true}, true, logger)
 	b := &bridge{server: upstream, tlsConfig: client.clientTLS(server.fingerprint()), proxyDomains: domainRules{"localhost": true}, logger: logger}
 	address := startBridge(t, b)
-	// The direct route forbids both this port and loopback; success proves remote routing.
 	target := "localhost:" + strconv.Itoa(port)
 	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")
 	if status != http.StatusOK {

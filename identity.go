@@ -94,7 +94,6 @@ func generateKey(path string) (ed25519.PrivateKey, error) {
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
-	// Publish only a complete key; simultaneous first runs converge on one identity.
 	if err := os.Link(file.Name(), path); errors.Is(err, os.ErrExist) {
 		return readKey(path)
 	} else if err != nil {

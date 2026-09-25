@@ -15,12 +15,14 @@ import (
 	"time"
 )
 
+var upstreamReplyTimeout = dialTimeout + headerTimeout
+
 type bridge struct {
 	server       string
 	tlsConfig    *tls.Config
 	blocklist    domainBlocklist
-	proxyDomains domainRules // nil proxies everything; empty routes everything directly
-	direct       *proxy      // reuses destination dialing safeguards; never serves HTTP
+	proxyDomains domainRules
+	direct       *proxy
 	logger       *slog.Logger
 }
 
@@ -161,15 +163,23 @@ func (b *bridge) forward(local net.Conn) {
 		return
 	}
 	defer upstream.Close()
+	_ = upstream.SetDeadline(time.Now().Add(upstreamReplyTimeout))
 	if _, err := fmt.Fprintf(upstream, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target); err != nil {
 		respond(local, http.StatusBadGateway, "encrypted upstream unavailable")
 		return
 	}
 	upstreamReader := bufio.NewReader(upstream)
 	if _, err := upstreamReader.Peek(1); err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			b.logger.Warn("encrypted upstream did not answer", "target", target, "error", err)
+			respond(local, http.StatusGatewayTimeout, "encrypted upstream timed out")
+			return
+		}
 		b.logger.Warn("encrypted upstream rejected the connection; is this identity a -client-key on the server?", "target", target, "error", err)
 		respond(local, http.StatusBadGateway, "encrypted upstream rejected the connection")
 		return
 	}
+	_ = upstream.SetDeadline(time.Time{})
 	pipe(local, reader, upstream, upstreamReader)
 }

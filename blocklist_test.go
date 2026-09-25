@@ -30,7 +30,8 @@ func TestLoadBlocklist(t *testing.T) {
 	if _, err := loadBlocklist(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("missing file accepted")
 	}
-	for _, bad := range []string{"https://example.com", "example.com:443", "*.example.com", "example.com # inline", "bücher.example", "*"} {
+	for _, bad := range []string{"https://example.com", "example.com:443", "*.example.com", "example.com # inline", "bücher.example", "*",
+		".example.com", "example..com", "example.com..", "1.2.3.4"} {
 		_, err := loadBlocklist(writeFile(t, "ok.example\n"+bad+"\n"))
 		if err == nil || !strings.Contains(err.Error(), ":2:") {
 			t.Errorf("%q: %v", bad, err)

@@ -17,8 +17,6 @@ func (e commandExit) Error() string { return fmt.Sprintf("command exited with st
 func supervise(args []string, lease *bridgeLease) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = proxyEnv(os.Environ(), lease.Address)
-	// Stay in the shell's foreground process group: terminal reads, resize,
-	// Ctrl-Z and shell job control work without a PTY or terminal-mode rewriting.
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	signals := make(chan os.Signal, 16)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)

@@ -65,7 +65,7 @@ func TestManagedInteractiveTerminal(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("terminal input hung (background process group?)")
 	}
-	master.Write([]byte{3}) // terminal-generated SIGINT, not Process.Signal
+	master.Write([]byte{3})
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {

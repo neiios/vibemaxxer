@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// Re-exec the race-instrumented test binary, including the real daemon entry.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -176,7 +175,6 @@ func TestManagedConcurrentLifecycle(t *testing.T) {
 	}
 	again.Close()
 	leases[0].Close()
-	// Rejoining during grace cancels shutdown.
 	time.Sleep(c.Grace / 3)
 	rejoin := mustLease(t, c, root)
 	if rejoin.Address != leases[0].Address {
@@ -217,6 +215,9 @@ func TestManagedCrashRecovery(t *testing.T) {
 	c, root := managedFixture(t)
 	l := mustLease(t, c, root)
 	pid := leasePID(t, l)
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err != nil || cwd != "/" {
+		t.Fatalf("daemon cwd %q %v", cwd, err)
+	}
 	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,6 @@ func TestManagedConfigSnapshots(t *testing.T) {
 	if status != 403 {
 		t.Fatalf("snapshot blocklist changed: %d", status)
 	}
-	// Neither the rule edit nor upstream failure can turn this VPN match direct.
 	conn, _, status := connect(t, a.Address, nil, connectRequest("vpn.example:443"), "")
 	conn.Close()
 	if status != 502 {
@@ -370,7 +370,6 @@ func TestManagedStartupBounded(t *testing.T) {
 		t.Fatal("startup lock wait not bounded")
 	}
 	unlock(gate)
-	// Owner without a ready socket represents a stuck/crashed-starting launcher.
 	owner, err := privateFile(filepath.Join(root, c.digest()) + ".owner")
 	if err != nil {
 		t.Fatal(err)
@@ -427,7 +426,6 @@ func TestManagedSupervisorSignalAndDeath(t *testing.T) {
 			exe, _ := os.Executable()
 			ready := filepath.Join(root, "ready")
 			cmd := exec.Command(exe, managedRunArgs(c, root, exe, "_test-child", "wait", ready)...)
-			// Isolate only these fixtures, never signal unrelated running bridges.
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -441,7 +439,6 @@ func TestManagedSupervisorSignalAndDeath(t *testing.T) {
 					t.Fatalf("signal status: %v", err)
 				}
 			}
-			// Even a surviving child must not keep the control lease alive.
 			waitStopped(t, c, root)
 		})
 	}
@@ -474,7 +471,6 @@ func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
 func TestManagedLeaseDisconnect(t *testing.T) {
 	c, root := managedFixture(t)
 	l := mustLease(t, c, root)
-	// Additional raw live connections are leases too; no PID/protocol counter.
 	raw, err := net.Dial("unix", filepath.Join(root, c.digest())+".sock")
 	if err != nil {
 		t.Fatal(err)
