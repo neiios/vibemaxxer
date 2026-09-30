@@ -31,7 +31,6 @@ func runRun(args []string) error {
 	domains := flags.String("proxy-domains", "", "selective VPN domain file")
 	ports := flags.String("direct-ports", "443", "allowed direct destination ports")
 	key := keyFlag(flags)
-	runtime := flags.String("runtime-dir", "", "private managed runtime directory (default $XDG_RUNTIME_DIR/vibemaxxer, or /tmp/vibemaxxer-UID when unset)")
 	grace := flags.Duration("grace", 3*time.Second, "managed idle shutdown grace")
 	timeout := flags.Duration("startup-timeout", 15*time.Second, "maximum managed startup wait")
 	if err := flags.Parse(args); err != nil {
@@ -57,7 +56,7 @@ func runRun(args []string) error {
 		if err != nil {
 			return err
 		}
-		lease, err := managed.Acquire(c, *runtime, *timeout)
+		lease, err := managed.Acquire(c, *timeout)
 		if err != nil {
 			return err
 		}

@@ -54,11 +54,11 @@ func connectLease(socket, logPath string, deadline time.Time) (*Lease, error) {
 	return &Lease{Conn: conn, Address: address, Log: logPath}, nil
 }
 
-func Acquire(c Config, runtime string, timeout time.Duration) (*Lease, error) {
+func Acquire(c Config, timeout time.Duration) (*Lease, error) {
 	if timeout < 100*time.Millisecond || timeout > time.Minute {
 		return nil, errors.New("-startup-timeout must be between 100ms and 1m")
 	}
-	root, err := RuntimeDir(runtime)
+	root, err := RuntimeDir()
 	if err != nil {
 		return nil, err
 	}

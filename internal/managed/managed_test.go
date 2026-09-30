@@ -25,18 +25,24 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func managedFixture(t *testing.T) (Config, string) {
+func runtimeRoot(t *testing.T) string {
 	t.Helper()
-	root, err := os.MkdirTemp("", "vmx-test-")
+	tmp, err := os.MkdirTemp("", "vmx-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	if os.Getenv("VIBEMAXXER_TEST_NIX_SANDBOX") == "1" {
-		if _, err := RuntimeDir(root); err != nil {
-			t.Skipf("Nix sandbox cannot provide a trusted runtime ancestry: %v", err)
-		}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("XDG_RUNTIME_DIR", tmp)
+	root, err := RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
 	}
+	return root
+}
+
+func managedFixture(t *testing.T) (Config, string) {
+	t.Helper()
+	root := runtimeRoot(t)
 	key := filepath.Join(root, "identity.pem")
 	server, _ := proxytest.ClosedPort(t)
 	c, err := Snapshot(server, strings.Repeat("ab", 32), "127.0.0.1:0", key, "", "", "443", 200*time.Millisecond)
@@ -45,9 +51,9 @@ func managedFixture(t *testing.T) (Config, string) {
 	}
 	return c, root
 }
-func mustLease(t *testing.T, c Config, root string) *Lease {
+func mustLease(t *testing.T, c Config) *Lease {
 	t.Helper()
-	lease, err := Acquire(c, root, 3*time.Second)
+	lease, err := Acquire(c, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +108,7 @@ func TestManagedConcurrentLifecycle(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			var err error
-			leases[i], err = Acquire(c, root, 4*time.Second)
+			leases[i], err = Acquire(c, 4*time.Second)
 			errs <- err
 		}(i)
 	}
@@ -127,21 +133,21 @@ func TestManagedConcurrentLifecycle(t *testing.T) {
 		l.Close()
 	}
 	time.Sleep(2 * c.Grace)
-	again := mustLease(t, c, root)
+	again := mustLease(t, c)
 	if again.Address != leases[0].Address {
 		t.Fatal("bridge stopped with a live lease")
 	}
 	again.Close()
 	leases[0].Close()
 	time.Sleep(c.Grace / 3)
-	rejoin := mustLease(t, c, root)
+	rejoin := mustLease(t, c)
 	if rejoin.Address != leases[0].Address {
 		t.Fatal("bridge not reused during grace")
 	}
 	time.Sleep(2 * c.Grace)
 	rejoin.Close()
 	waitStopped(t, c, root)
-	restarted := mustLease(t, c, root)
+	restarted := mustLease(t, c)
 	restarted.Close()
 	waitStopped(t, c, root)
 	logData, err := os.ReadFile(restarted.Log)
@@ -154,10 +160,10 @@ func TestManagedShutdownRegistrationRace(t *testing.T) {
 	c, root := managedFixture(t)
 	c.Grace = 100 * time.Millisecond
 	for i := 0; i < 12; i++ {
-		l := mustLease(t, c, root)
+		l := mustLease(t, c)
 		l.Close()
 		time.Sleep(c.Grace + time.Duration(i%3-1)*5*time.Millisecond)
-		l = mustLease(t, c, root)
+		l = mustLease(t, c)
 		time.Sleep(2 * c.Grace)
 		conn, err := net.DialTimeout("tcp", l.Address, time.Second)
 		if err != nil {
@@ -171,7 +177,7 @@ func TestManagedShutdownRegistrationRace(t *testing.T) {
 
 func TestManagedCrashRecovery(t *testing.T) {
 	c, root := managedFixture(t)
-	l := mustLease(t, c, root)
+	l := mustLease(t, c)
 	pid := leasePID(t, l)
 	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err != nil || cwd != "/" {
 		t.Fatalf("daemon cwd %q %v", cwd, err)
@@ -184,7 +190,7 @@ func TestManagedCrashRecovery(t *testing.T) {
 		t.Fatal("lease survived daemon crash")
 	}
 	l.Close()
-	next := mustLease(t, c, root)
+	next := mustLease(t, c)
 	if leasePID(t, next) == pid {
 		t.Fatal("did not replace crashed daemon")
 	}
@@ -208,13 +214,13 @@ func TestManagedConfigSnapshots(t *testing.T) {
 	if first.Digest() != snapshot().Digest() {
 		t.Fatal("unstable digest")
 	}
-	a := mustLease(t, first, root)
+	a := mustLease(t, first)
 	os.WriteFile(block, []byte("other.example\n"), 0600)
 	second := snapshot()
 	if first.Digest() == second.Digest() {
 		t.Fatal("rule contents missing from key")
 	}
-	b := mustLease(t, second, root)
+	b := mustLease(t, second)
 	if a.Address == b.Address {
 		t.Fatal("different configs shared listener")
 	}
@@ -252,25 +258,6 @@ func TestManagedConfigSnapshots(t *testing.T) {
 
 func TestManagedPrivateState(t *testing.T) {
 	_, root := managedFixture(t)
-	for _, mode := range []os.FileMode{0755, 0777, 0710} {
-		os.Chmod(root, mode)
-		if _, err := RuntimeDir(root); err == nil {
-			t.Fatalf("accepted mode %o", mode)
-		}
-	}
-	os.Chmod(root, 0700)
-	link := root + "-link"
-	os.Symlink(root, link)
-	defer os.Remove(link)
-	if _, err := RuntimeDir(link); err == nil {
-		t.Fatal("accepted runtime symlink")
-	}
-	if _, err := RuntimeDir("relative"); err == nil {
-		t.Fatal("accepted relative runtime")
-	}
-	if _, err := RuntimeDir(filepath.Join(link, "nested")); err == nil {
-		t.Fatal("accepted symlink ancestor")
-	}
 	target := filepath.Join(root, "target")
 	os.WriteFile(target, []byte("do not touch"), 0600)
 	sym := filepath.Join(root, "sym")
@@ -297,13 +284,6 @@ func TestManagedPrivateState(t *testing.T) {
 		f.Close()
 		t.Fatal("accepted FIFO")
 	}
-	if os.Getuid() == 0 {
-		os.Chown(root, 12345, 12345)
-		if _, err := RuntimeDir(root); err == nil {
-			t.Fatal("accepted foreign owner")
-		}
-		os.Chown(root, 0, 0)
-	}
 }
 
 func TestManagedStartupBounded(t *testing.T) {
@@ -315,7 +295,7 @@ func TestManagedStartupBounded(t *testing.T) {
 	defer gate.Close()
 	syscall.Flock(int(gate.Fd()), syscall.LOCK_EX)
 	start := time.Now()
-	if _, err := Acquire(c, root, 150*time.Millisecond); err == nil {
+	if _, err := Acquire(c, 150*time.Millisecond); err == nil {
 		t.Fatal("accepted held startup lock")
 	}
 	if time.Since(start) > time.Second {
@@ -329,14 +309,14 @@ func TestManagedStartupBounded(t *testing.T) {
 	defer owner.Close()
 	syscall.Flock(int(owner.Fd()), syscall.LOCK_EX)
 	start = time.Now()
-	if _, err := Acquire(c, root, 150*time.Millisecond); err == nil {
+	if _, err := Acquire(c, 150*time.Millisecond); err == nil {
 		t.Fatal("accepted unready owner")
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("startup readiness wait not bounded")
 	}
 	unlock(owner)
-	l := mustLease(t, c, root)
+	l := mustLease(t, c)
 	l.Close()
 	waitStopped(t, c, root)
 }
@@ -345,7 +325,7 @@ func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
 	c, root := managedFixture(t)
 	socket := filepath.Join(root, c.Digest()) + ".sock"
 	os.WriteFile(socket, []byte("not a socket"), 0600)
-	if _, err := Acquire(c, root, time.Second); err == nil {
+	if _, err := Acquire(c, time.Second); err == nil {
 		t.Fatal("accepted non-socket control file")
 	}
 	data, _ := os.ReadFile(socket)
@@ -360,7 +340,7 @@ func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
 	stale.SetUnlinkOnClose(false)
 	stale.Close()
 	os.Chmod(socket, 0600)
-	l := mustLease(t, c, root)
+	l := mustLease(t, c)
 	l.Close()
 	waitStopped(t, c, root)
 }
@@ -374,7 +354,7 @@ func TestManagedDoesNotAdoptExistingTCPListener(t *testing.T) {
 	defer listener.Close()
 	c.Listen = listener.Addr().String()
 	start := time.Now()
-	if _, err := Acquire(c, root, 200*time.Millisecond); err == nil {
+	if _, err := Acquire(c, 200*time.Millisecond); err == nil {
 		t.Fatal("adopted unrelated TCP listener")
 	}
 	if time.Since(start) > time.Second {

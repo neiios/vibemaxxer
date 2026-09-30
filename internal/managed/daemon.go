@@ -28,11 +28,7 @@ func Run(base string) error {
 		return err
 	}
 	snapshot.Close()
-	root, err := RuntimeDir(filepath.Dir(base))
-	if err != nil {
-		return err
-	}
-	if base != filepath.Join(root, c.Digest()) {
+	if filepath.Base(base) != c.Digest() {
 		return errors.New("managed snapshot mismatch")
 	}
 	owned, err := owner.Stat()

@@ -89,15 +89,15 @@ func child(args []string) int {
 
 func runtimeRoot(t *testing.T) string {
 	t.Helper()
-	root, err := os.MkdirTemp("", "vmx-test-")
+	tmp, err := os.MkdirTemp("", "vmx-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(root) })
-	if os.Getenv("VIBEMAXXER_TEST_NIX_SANDBOX") == "1" {
-		if _, err := managed.RuntimeDir(root); err != nil {
-			t.Skipf("Nix sandbox cannot provide a trusted runtime ancestry: %v", err)
-		}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+	t.Setenv("XDG_RUNTIME_DIR", tmp)
+	root, err := managed.RuntimeDir()
+	if err != nil {
+		t.Fatal(err)
 	}
 	return root
 }
@@ -119,7 +119,7 @@ func managedFixture(t *testing.T) (managed.Config, string) {
 }
 
 func managedRunArgs(c managed.Config, root string, child ...string) []string {
-	args := []string{"_test-run", "run", "-server", c.Server, "-server-key", c.ServerKey, "-key", filepath.Join(root, "identity.pem"), "-runtime-dir", root, "-grace", c.Grace.String(), "--"}
+	args := []string{"_test-run", "run", "-server", c.Server, "-server-key", c.ServerKey, "-key", filepath.Join(root, "identity.pem"), "-grace", c.Grace.String(), "--"}
 	return append(args, child...)
 }
 

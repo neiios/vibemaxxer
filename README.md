@@ -61,7 +61,7 @@ vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP \
   -direct-ports 443,8443 -- pi
 ```
 
-Managed `run` also accepts `-key`, `-listen` (default `127.0.0.1:0`, a free port), `-grace` (default `3s`), `-startup-timeout` (default `15s`), and `-runtime-dir` (default `$XDG_RUNTIME_DIR/vibemaxxer`, or `/tmp/vibemaxxer-UID` when unset). Grace and startup timeout must be between `100ms` and `1m`. Managed flags require `-server` and `-server-key`; they cannot be combined with `-bridge`. Use the same flags across sessions to share. An explicit occupied port fails startup; an existing listener is never adopted.
+Managed `run` also accepts `-key`, `-listen` (default `127.0.0.1:0`, a free port), `-grace` (default `3s`), `-startup-timeout` (default `15s`). Grace and startup timeout must be between `100ms` and `1m`. Managed flags require `-server` and `-server-key`; they cannot be combined with `-bridge`. Use the same flags across sessions to share. An explicit occupied port fails startup; an existing listener is never adopted.
 
 ### Blocklist
 
@@ -112,7 +112,6 @@ Applications still use the local bridge for both routes; this does not add suppo
 | `-listen` | run (managed) | `127.0.0.1:0` | Loopback listener, automatic free port |
 | `-grace` | run (managed) | `3s` | Idle shutdown delay |
 | `-startup-timeout` | run (managed) | `15s` | Bounded lock/readiness wait |
-| `-runtime-dir` | run (managed) | `$XDG_RUNTIME_DIR/vibemaxxer`, or `/tmp/vibemaxxer-UID` when unset | Private owner-only runtime directory |
 
 Fixed: 10-second dial and header timeouts, 256 tunnels per process. Private, loopback, link-local, CGNAT, and any prefix configured on the host's own interfaces at startup are refused after DNS resolution. Other global IPv6 destinations are indistinguishable from the internet; if the LAN uses global addresses beyond the host's own prefixes, block them with host firewall rules. The bridge waits at most 20 seconds for the host's CONNECT reply.
 
@@ -131,7 +130,7 @@ To confirm a client is proxied, make a model request and watch for `tunnel opene
 - A configuration hash includes the server address/pin, actual identity key, listen address, direct ports, grace, **domain file bytes**, and executable contents. File paths alone are not keys. Absent and empty selective-routing files differ. Identical contents at different paths can share. Binary upgrades, identity replacement or rule edits create separate bridges; existing sessions retain their original snapshots. Edits are not hot-reloaded. Fixed listen ports cannot host two configurations simultaneously.
 - Per-configuration Linux `flock` locks serialize startup and protect shutdown versus lease registration. A separate inherited lifetime lock reserves ownership even before readiness; stale sockets are recovered only by its owner. No PID counters or PID-based cleanup. Lock files are deliberately never unlinked, avoiding split-lock races.
 - Every supervisor holds a live control Unix connection for the command's lifetime. Registration occurs under the same gate used by idle shutdown. EOF releases the lease. New leases during grace keep the bridge alive. Control descriptors are close-on-exec and are not passed to commands or their descendants.
-- The daemon starts a new session with `/dev/null` stdin and private log stdout/stderr, independent of the first supervisor's terminal, pipes or lifetime. It runs from `/` but stays in the first launcher's cgroup, so stopping a systemd unit that started that first session also stops the bridge. An unlinked private configuration snapshot is passed by descriptor. The runtime directory must be owned by the user, mode `0700`, with safe non-symlink ancestors. Control sockets and log/lock files are owner-validated and mode `0600`; control peers are UID-checked. Symlinks, hardlinked state files and unsafe existing files are refused. Same-UID processes are trusted.
+- The daemon starts a new session with `/dev/null` stdin and private log stdout/stderr, independent of the first supervisor's terminal, pipes or lifetime. It runs from `/` but stays in the first launcher's cgroup, so stopping a systemd unit that started that first session also stops the bridge. An unlinked private configuration snapshot is passed by descriptor. Runtime state lives in `$XDG_RUNTIME_DIR/vibemaxxer`, or `/tmp/vibemaxxer-UID` when unset. Control sockets and log/lock files are owner-validated and mode `0600`; control peers are UID-checked. Symlinks, hardlinked state files and unsafe existing files are refused. Same-UID processes are trusted.
 - Logs persist after shutdown, including block rule diagnostics and upstream failures. They are not rotated automatically. Inspect the printed `.log` path; remove old logs yourself. Do not delete runtime state or its lock files while sessions/launchers are active. There is no always-running manager or persistent service.
 - Startup lock/readiness waits are bounded. Local file reads and executable hashing precede that wait. A launcher that times out may leave an already-starting daemon, which exits after its idle grace. A bridge crash is reported to live supervisors; it is **not** transparently restarted for existing commands. VPN requests fail rather than fall back directly. A later new session can recover stale state and start a new bridge.
 - If a supervisor is killed (including SIGKILL), its lease closes even if its command survives. Commands that daemonize or leave background children do not extend the lease: tracking is by direct supervised session, not descendant process trees. Those children may lose proxy access after grace. Similarly, stopping a supervisor with job control retains its lease until it resumes/exits. No automatic child-tree cleanup is attempted.
@@ -151,7 +150,7 @@ nix build .      # ./result/bin/vibemaxxer
 nix develop
 ```
 
-Or with Go 1.25 or newer:
+Or with Go 1.27 or newer:
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o vibemaxxer ./cmd/vibemaxxer
