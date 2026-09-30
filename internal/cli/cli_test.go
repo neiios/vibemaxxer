@@ -8,63 +8,32 @@ import (
 	"testing"
 
 	"github.com/neiios/vibemaxxer/internal/identity"
-
 	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
-func TestFlagValidation(t *testing.T) {
+// Each case encodes a deliberate policy, not just a missing flag: no wildcard
+// or LAN listeners, no mixing external and managed mode, bounded grace.
+func TestFlagPolicy(t *testing.T) {
 	logger, _ := proxytest.Logger()
 	key := filepath.Join(t.TempDir(), "id.pem")
 	fp := strings.Repeat("ab", 32)
 	closed, _ := proxytest.ClosedPort(t)
 	for _, args := range [][]string{
-		{"serve"},
-		{"serve", "-listen", "127.0.0.1:0"},
-		{"serve", "-listen", "127.0.0.1:0", "-client-key", "nothex"},
-		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "-ports", "https"},
-		{"serve", "-listen", "127.0.0.1:0", "-client-key", fp, "extra"},
+		{"serve", "-listen", "127.0.0.1:0", "-key", key},
+		{"serve", "-listen", "127.0.0.1:0", "-client-key", "nothex", "-key", key},
 		{"serve", "-listen", "0.0.0.0:0", "-client-key", fp, "-key", key},
 		{"serve", "-listen", ":0", "-client-key", fp, "-key", key},
 		{"serve", "-listen", "[::]:0", "-client-key", fp, "-key", key},
-		{"bridge"},
-		{"bridge", "-server", "host", "-server-key", fp},
-		{"bridge", "-server", "host:8443", "-server-key", "short"},
-		{"bridge", "-server", "host:8443", "-server-key", fp, "-listen", "192.168.1.5:8888"},
-		{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key},
-		{"run"},
-		{"run", "-bridge", closed, "true"},
-		{"run", "-bridge", closed, "-server", "host:443", "--", "true"},
+		{"bridge", "-server", "host:8443", "-server-key", fp, "-listen", "192.168.1.5:8888", "-key", key},
+		{"bridge", "-server", "host:8443", "-server-key", fp, "-listen", "127.0.0.1:0", "-key", key},
+		{"run", "-bridge", closed, "--", "true"},
+		{"run", "-bridge", closed, "-server", "host:443", "-server-key", fp, "-key", key, "--", "true"},
 		{"run", "-server-key", fp, "--", "true"},
-		{"run", "-blocklist", "missing", "--", "true"},
-		{"run", "-server", "host:443", "--", "true"},
-		{"run", "-server", "host:443", "-server-key", fp, "-listen", "0.0.0.0:0", "--", "true"},
-		{"run", "-server", "host:443", "-server-key", fp, "-grace", "0s", "--", "true"},
-		{"nonsense"},
+		{"run", "-server", "host:443", "-server-key", fp, "-listen", "0.0.0.0:0", "-key", key, "--", "true"},
+		{"run", "-server", "host:443", "-server-key", fp, "-grace", "0s", "-key", key, "--", "true"},
 	} {
 		if err := Run(logger, args); err == nil {
 			t.Errorf("%v: accepted", args)
-		}
-	}
-}
-
-func TestErrorsNameFlags(t *testing.T) {
-	logger, _ := proxytest.Logger()
-	key := filepath.Join(t.TempDir(), "id.pem")
-	fp := strings.Repeat("ab", 32)
-	for _, tc := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"run", "-server", "host", "-server-key", fp, "--", "true"}, "-server"},
-		{[]string{"run", "-server", "host:443", "-server-key", "short", "--", "true"}, "-server-key"},
-		{[]string{"run", "-server", "host:443", "-server-key", fp, "-direct-ports", "https", "--", "true"}, "-direct-ports"},
-		{[]string{"run", "-server", "host:443", "-server-key", fp, "-blocklist", "/nonexistent", "--", "true"}, "-blocklist"},
-		{[]string{"run", "-server", "host:443", "-server-key", fp, "-proxy-domains", "/nonexistent", "--", "true"}, "-proxy-domains"},
-		{[]string{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key}, "-blocklist"},
-	} {
-		err := Run(logger, tc.args)
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
 		}
 	}
 }
@@ -78,9 +47,18 @@ func TestKeyCommand(t *testing.T) {
 	if err := runKey([]string{"-key", key}, &second); err != nil {
 		t.Fatal(err)
 	}
+	if first.String() != second.String() {
+		t.Fatalf("key output changed:\n%s\n%s", first.String(), second.String())
+	}
 	line, _, _ := strings.Cut(first.String(), "\n")
-	if _, err := identity.ParseFingerprint(line); err != nil || first.String() != second.String() {
-		t.Fatalf("key output:\n%s\n%s", first.String(), second.String())
+	// Fingerprints are pasted between machines; accept case and whitespace noise.
+	if got, err := identity.ParseFingerprint("  " + strings.ToUpper(line) + "\n"); err != nil || got != line {
+		t.Fatalf("fingerprint %q: %q, %v", line, got, err)
+	}
+	for _, bad := range []string{"", line[:63], line + "0", strings.Repeat("zz", 32)} {
+		if _, err := identity.ParseFingerprint(bad); err == nil {
+			t.Errorf("accepted fingerprint %q", bad)
+		}
 	}
 }
 

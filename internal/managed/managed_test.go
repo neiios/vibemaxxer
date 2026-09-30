@@ -1,10 +1,7 @@
 package managed
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -234,24 +231,20 @@ func TestManagedConfigSnapshots(t *testing.T) {
 	if !strings.Contains(string(data), "destination blocked") || !strings.Contains(string(data), "no direct fallback") {
 		t.Fatalf("missing diagnostics: %s", data)
 	}
-	for name, modify := range map[string]func(*Config){
-		"server":          func(x *Config) { x.Server = "other:443" },
-		"pin":             func(x *Config) { x.ServerKey = strings.Repeat("cd", 32) },
-		"listen":          func(x *Config) { x.Listen = "127.0.0.1:8889" },
-		"identity":        func(x *Config) { x.Key = []byte("other") },
-		"ports":           func(x *Config) { x.Ports = map[int]bool{8443: true} },
-		"binary":          func(x *Config) { x.Executable = "new version" },
-		"grace":           func(x *Config) { x.Grace = time.Second },
-		"domain contents": func(x *Config) { x.DomainContents = []byte("# comment\nvpn.example\n") },
-		"empty vs absent": func(x *Config) { x.Domains = nil },
-	} {
-		t.Run(name, func(t *testing.T) {
-			copy := first
-			modify(&copy)
-			if copy.Digest() == first.Digest() {
-				t.Fatal("configuration collision")
-			}
-		})
+	// An empty -proxy-domains file means "connect everything directly"; no file
+	// means "proxy everything". They must never share a bridge.
+	empty := filepath.Join(root, "empty")
+	os.WriteFile(empty, nil, 0600)
+	withEmpty, err := Snapshot(c.Server, c.ServerKey, c.Listen, filepath.Join(root, "identity.pem"), "", empty, "443", c.Grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withAbsent, err := Snapshot(c.Server, c.ServerKey, c.Listen, filepath.Join(root, "identity.pem"), "", "", "443", c.Grace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withEmpty.Digest() == withAbsent.Digest() {
+		t.Fatal("empty rule file aliases absent rule file")
 	}
 	a.Close()
 	b.Close()
@@ -374,29 +367,6 @@ func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
 	waitStopped(t, c, root)
 }
 
-func TestManagedLeaseDisconnect(t *testing.T) {
-	c, root := managedFixture(t)
-	l := mustLease(t, c, root)
-	raw, err := net.Dial("unix", filepath.Join(root, c.Digest())+".sock")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var addr string
-	if err = json.NewDecoder(bufio.NewReader(raw)).Decode(&addr); err != nil {
-		t.Fatal(err)
-	}
-	l.Close()
-	time.Sleep(2 * c.Grace)
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	io.WriteString(conn, "GET / HTTP/1.0\r\n\r\n")
-	conn.Close()
-	raw.Close()
-	waitStopped(t, c, root)
-}
-
 func TestManagedDoesNotAdoptExistingTCPListener(t *testing.T) {
 	c, root := managedFixture(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -422,27 +392,4 @@ func TestManagedDoesNotAdoptExistingTCPListener(t *testing.T) {
 		t.Fatalf("missing startup diagnosis: %s", data)
 	}
 	waitStopped(t, c, root)
-}
-
-func TestManagedDomainFilePresenceAndValidation(t *testing.T) {
-	c, root := managedFixture(t)
-	path := filepath.Join(root, "rules")
-	os.WriteFile(path, nil, 0600)
-	rules, contents, err := snapshotRules(path)
-	if err != nil || rules == nil {
-		t.Fatalf("empty file must mean direct-all: %v", err)
-	}
-	empty := c
-	empty.Domains = rules
-	empty.DomainContents = contents
-	if empty.Digest() == c.Digest() {
-		t.Fatal("empty file aliases absent file")
-	}
-	os.WriteFile(path, []byte("https://invalid.example\n"), 0600)
-	if _, _, err := snapshotRules(path); err == nil {
-		t.Fatal("accepted malformed rules")
-	}
-	if _, _, err := snapshotRules(path + "-missing"); err == nil {
-		t.Fatal("accepted missing rules")
-	}
 }

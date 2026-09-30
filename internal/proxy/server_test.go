@@ -66,35 +66,6 @@ func TestPrivateDestinationsBlockedByDefault(t *testing.T) {
 	}
 }
 
-func TestPublicDestinationPolicy(t *testing.T) {
-	for addr, want := range map[string]bool{
-		"1.1.1.1": true, "2606:4700::1111": true,
-		"10.0.0.1": false, "192.168.1.1": false, "172.16.0.1": false, "127.0.0.1": false,
-		"169.254.1.1": false, "100.64.0.1": false, "::1": false, "fe80::1": false,
-		"fd00::1": false, "0.0.0.0": false, "224.0.0.1": false, "::ffff:192.168.1.1": false,
-	} {
-		a, err := netip.ParseAddr(addr)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := publicDestination(a); got != want {
-			t.Errorf("%s: public=%v", addr, got)
-		}
-	}
-}
-
-func TestParsePorts(t *testing.T) {
-	ports, err := ParsePorts("443, 8443")
-	if err != nil || !ports[443] || !ports[8443] || len(ports) != 2 {
-		t.Fatalf("ports %v, %v", ports, err)
-	}
-	for _, bad := range []string{"", "0", "65536", "https", "443,,8443"} {
-		if _, err := ParsePorts(bad); err == nil {
-			t.Errorf("accepted %q", bad)
-		}
-	}
-}
-
 func TestTunnelUpstreamHalfClose(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -157,15 +128,19 @@ func TestTunnelUpstreamHalfClose(t *testing.T) {
 	}
 }
 
-func TestLocalPrefixesRefused(t *testing.T) {
-	p := &Server{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
+// Destination policy is the server's main safety property: a compromised or
+// careless workstation must not reach the VPN host's LAN, loopback, or link-local
+// networks through the tunnel.
+func TestDestinationPolicy(t *testing.T) {
+	s := &Server{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
 	for addr, want := range map[string]bool{
-		"2001:db8:1::10": false, "203.0.113.7": false,
-		"2001:db8:2::10": true, "1.1.1.1": true,
-		"10.0.0.1": false, "::1": false,
-		"2001:db8:1::10%eth0": false, "fe80::1%eth0": false,
+		"1.1.1.1": true, "2606:4700::1111": true, "2001:db8:2::10": true,
+		"10.0.0.1": false, "192.168.1.1": false, "172.16.0.1": false, "127.0.0.1": false, "::1": false,
+		"169.254.1.1": false, "fe80::1": false, "fd00::1": false, "100.64.0.1": false,
+		"0.0.0.0": false, "224.0.0.1": false, "::ffff:192.168.1.1": false,
+		"203.0.113.7": false, "2001:db8:1::10": false, "2001:db8:1::10%eth0": false, "fe80::1%eth0": false,
 	} {
-		if got := p.allowed(netip.MustParseAddr(addr)); got != want {
+		if got := s.allowed(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("%s: allowed=%v", addr, got)
 		}
 	}

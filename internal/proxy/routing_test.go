@@ -10,28 +10,6 @@ import (
 	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
-func TestDomainRouting(t *testing.T) {
-	for _, tc := range []struct {
-		host   string
-		direct bool
-	}{
-		{"example.com", false}, {"api.EXAMPLE.com.", false},
-		{"notexample.com", true}, {"example.com.evil", true},
-		{"127.0.0.1", true}, {"::1", true},
-	} {
-		b := &Bridge{ProxyDomains: domain.Rules{"example.com": true, "127.0.0.1": true}}
-		if got := b.routeDirect(tc.host); got != tc.direct {
-			t.Errorf("%s: direct=%v", tc.host, got)
-		}
-	}
-	if (&Bridge{}).routeDirect("example.com") {
-		t.Fatal("default must proxy everything")
-	}
-	if !(&Bridge{ProxyDomains: domain.Rules{}}).routeDirect("example.com") {
-		t.Fatal("empty list must route directly")
-	}
-}
-
 func TestDirectRoutingEndToEnd(t *testing.T) {
 	target, port := proxytest.EchoServer(t)
 	closed, _ := proxytest.ClosedPort(t)

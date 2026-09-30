@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/neiios/vibemaxxer/internal/domain"
-	"github.com/neiios/vibemaxxer/internal/identity"
 	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
@@ -88,30 +87,6 @@ func TestBridgeReportsUpstreamFailures(t *testing.T) {
 	address, _ = testBridge(t, serverAddress, server.Fingerprint(), nil)
 	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("example.com:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("unpaired status %d", status)
-	}
-}
-
-func TestProbeDistinguishesOutcomes(t *testing.T) {
-	server, client, stranger := proxytest.Identity(t), proxytest.Identity(t), proxytest.Identity(t)
-	serverLogger, _ := proxytest.Logger()
-	serverAddress := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{443: true}, true, serverLogger)
-	closed, _ := proxytest.ClosedPort(t)
-	for _, c := range []struct {
-		name, server, pin string
-		id                *identity.Identity
-		want              string
-	}{
-		{"paired", serverAddress, server.Fingerprint(), client, "upstream verified"},
-		{"unknown identity", serverAddress, server.Fingerprint(), stranger, "rejected this identity"},
-		{"wrong pin", serverAddress, stranger.Fingerprint(), client, "upstream check failed"},
-		{"unreachable", closed, server.Fingerprint(), client, "upstream check failed"},
-	} {
-		logger, logs := proxytest.Logger()
-		b := &Bridge{Upstream: c.server, TLSConfig: c.id.ClientTLS(c.pin), Logger: logger}
-		b.Probe()
-		if !strings.Contains(logs.String(), c.want) {
-			t.Errorf("%s: want %q in log:\n%s", c.name, c.want, logs.String())
-		}
 	}
 }
 

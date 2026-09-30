@@ -24,8 +24,13 @@ func TestLoad(t *testing.T) {
 	if len(list) != 3 || !list["example.com"] || !list["telemetry.vendor.com"] || !list["xn--bcher-kva.example"] {
 		t.Fatalf("list %v", list)
 	}
+	// No file means "no rules" (nil); an empty file means "empty rules". The
+	// bridge treats these differently: nil proxies everything, empty proxies nothing.
 	if list, err := Load(""); err != nil || list != nil {
 		t.Fatalf("empty path: %v, %v", list, err)
+	}
+	if list, err := Load(writeFile(t, "# comment\n\n")); err != nil || list == nil || len(list) != 0 {
+		t.Fatalf("empty file: %v, %v", list, err)
 	}
 	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("missing file accepted")
@@ -36,16 +41,6 @@ func TestLoad(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), ":2:") {
 			t.Errorf("%q: %v", bad, err)
 		}
-	}
-}
-
-func TestEmptyFileIsEmptyRules(t *testing.T) {
-	rules, err := Load(writeFile(t, "# comment\n\n"))
-	if err != nil || rules == nil || len(rules) != 0 {
-		t.Fatalf("empty file: %v, %v", rules, err)
-	}
-	if _, err := Parse("inline", "https://example.com\n"); err == nil {
-		t.Fatal("invalid rule accepted")
 	}
 }
 

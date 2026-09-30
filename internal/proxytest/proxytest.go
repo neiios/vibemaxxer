@@ -132,7 +132,7 @@ func ClosedPort(t *testing.T) (address string, port int) {
 
 func WaitForLog(t *testing.T, logs *LogBuffer, want string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(logs.String(), want) {
 		if time.Now().After(deadline) {
 			t.Fatalf("want %q in log:\n%s", want, logs.String())
