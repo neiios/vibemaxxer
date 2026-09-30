@@ -154,7 +154,7 @@ nix develop
 Or with Go 1.25 or newer:
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -o vibemaxxer .
+CGO_ENABLED=0 go build -trimpath -o vibemaxxer ./cmd/vibemaxxer
 ```
 
 Linux only.
