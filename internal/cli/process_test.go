@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bufio"
@@ -21,12 +21,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "_managed":
-			main()
-			return
+			os.Exit(Main(os.Args[1:]))
 		case "_test-run":
-			os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
-			main()
-			return
+			os.Exit(Main(os.Args[2:]))
 		case "_test-child":
 			switch os.Args[2] {
 			case "fds":

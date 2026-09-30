@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ func TestFlagValidation(t *testing.T) {
 		{"run", "-server", "host:443", "-server-key", fp, "-grace", "0s", "--", "true"},
 		{"nonsense"},
 	} {
-		if err := run(logger, args); err == nil {
+		if err := Run(logger, args); err == nil {
 			t.Errorf("%v: accepted", args)
 		}
 	}
@@ -62,7 +62,7 @@ func TestErrorsNameFlags(t *testing.T) {
 		{[]string{"run", "-server", "host:443", "-server-key", fp, "-proxy-domains", "/nonexistent", "--", "true"}, "-proxy-domains"},
 		{[]string{"bridge", "-server", "host:8443", "-server-key", fp, "-blocklist", "/nonexistent", "-key", key}, "-blocklist"},
 	} {
-		err := run(logger, tc.args)
+		err := Run(logger, tc.args)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: %v, want %q", tc.args, err, tc.want)
 		}
