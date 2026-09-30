@@ -2,11 +2,11 @@ package main
 
 import (
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/neiios/vibemaxxer/internal/domain"
 )
 
 func TestDomainRouting(t *testing.T) {
@@ -18,7 +18,7 @@ func TestDomainRouting(t *testing.T) {
 		{"notexample.com", true}, {"example.com.evil", true},
 		{"127.0.0.1", true}, {"::1", true},
 	} {
-		b := &bridge{proxyDomains: domainRules{"example.com": true, "127.0.0.1": true}}
+		b := &bridge{proxyDomains: domain.Rules{"example.com": true, "127.0.0.1": true}}
 		if got := b.routeDirect(tc.host); got != tc.direct {
 			t.Errorf("%s: direct=%v", tc.host, got)
 		}
@@ -26,28 +26,8 @@ func TestDomainRouting(t *testing.T) {
 	if (&bridge{}).routeDirect("example.com") {
 		t.Fatal("default must proxy everything")
 	}
-	if !(&bridge{proxyDomains: domainRules{}}).routeDirect("example.com") {
+	if !(&bridge{proxyDomains: domain.Rules{}}).routeDirect("example.com") {
 		t.Fatal("empty list must route directly")
-	}
-}
-
-func TestRoutingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "domains")
-	if err := os.WriteFile(path, []byte("# comment\n\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	rules, err := loadDomainRules(path)
-	if err != nil || rules == nil || len(rules) != 0 {
-		t.Fatalf("empty file: %v, %v", rules, err)
-	}
-	if _, err := loadDomainRules(path + "-missing"); err == nil {
-		t.Fatal("missing file accepted")
-	}
-	if err := os.WriteFile(path, []byte("https://example.com\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadDomainRules(path); err == nil {
-		t.Fatal("invalid rule accepted")
 	}
 }
 
@@ -55,7 +35,7 @@ func TestDirectRoutingEndToEnd(t *testing.T) {
 	target, port := echoServer(t)
 	closed, _ := closedPort(t)
 	logger, logs := testLogger()
-	b := &bridge{server: closed, proxyDomains: domainRules{}, logger: logger,
+	b := &bridge{server: closed, proxyDomains: domain.Rules{}, logger: logger,
 		direct: &proxy{ports: map[int]bool{port: true}, allowPrivate: true}}
 	address := startBridge(t, b)
 	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")
@@ -71,8 +51,8 @@ func TestDirectRoutingEndToEnd(t *testing.T) {
 func TestRoutingRestrictions(t *testing.T) {
 	closed, _ := closedPort(t)
 	logger, _ := testLogger()
-	b := &bridge{server: closed, proxyDomains: domainRules{"localhost": true},
-		blocklist: domainRules{"blocked.example": true}, logger: logger}
+	b := &bridge{server: closed, proxyDomains: domain.Rules{"localhost": true},
+		blocklist: domain.Rules{"blocked.example": true}, logger: logger}
 	address := startBridge(t, b)
 	for _, tc := range []struct {
 		target string
@@ -94,7 +74,7 @@ func TestMatchedDomainUsesServer(t *testing.T) {
 	server, client := testIdentity(t), testIdentity(t)
 	logger, logs := testLogger()
 	upstream := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{port: true}, true, logger)
-	b := &bridge{server: upstream, tlsConfig: client.ClientTLS(server.Fingerprint()), proxyDomains: domainRules{"localhost": true}, logger: logger}
+	b := &bridge{server: upstream, tlsConfig: client.ClientTLS(server.Fingerprint()), proxyDomains: domain.Rules{"localhost": true}, logger: logger}
 	address := startBridge(t, b)
 	target := "localhost:" + strconv.Itoa(port)
 	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")

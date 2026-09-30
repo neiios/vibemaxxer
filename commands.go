@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
@@ -137,7 +138,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil || !bind.Addr().IsLoopback() || bind.Port() == 0 {
 		return errors.New("-listen must be a loopback IP:PORT such as 127.0.0.1:8888")
 	}
-	proxyDomains, err := loadDomainRules(*proxyDomainsPath)
+	proxyDomains, err := domain.Load(*proxyDomainsPath)
 	if err != nil {
 		return fmt.Errorf("-proxy-domains: %w", err)
 	}
@@ -145,7 +146,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return fmt.Errorf("-direct-ports: %w", err)
 	}
-	blocklist, err := loadBlocklist(*blocklistPath)
+	blocklist, err := domain.Load(*blocklistPath)
 	if err != nil {
 		return fmt.Errorf("-blocklist: %w", err)
 	}

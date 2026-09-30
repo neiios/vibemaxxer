@@ -13,6 +13,8 @@ import (
 	"net/netip"
 	"strconv"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/domain"
 )
 
 var upstreamReplyTimeout = dialTimeout + headerTimeout
@@ -20,8 +22,8 @@ var upstreamReplyTimeout = dialTimeout + headerTimeout
 type bridge struct {
 	server       string
 	tlsConfig    *tls.Config
-	blocklist    domainBlocklist
-	proxyDomains domainRules
+	blocklist    domain.Rules
+	proxyDomains domain.Rules
 	direct       *proxy
 	logger       *slog.Logger
 }
@@ -89,7 +91,7 @@ func (b *bridge) routeDirect(host string) bool {
 	if _, err := netip.ParseAddr(host); err == nil {
 		return true
 	}
-	return b.proxyDomains.match(host) == ""
+	return b.proxyDomains.Match(host) == ""
 }
 
 func (b *bridge) forwardDirect(local net.Conn, reader *bufio.Reader, target string, port int) {
@@ -144,7 +146,7 @@ func (b *bridge) forward(local net.Conn) {
 	}
 	target := net.JoinHostPort(host, strconv.Itoa(port))
 	if _, err := netip.ParseAddr(host); err != nil {
-		if rule := b.blocklist.match(host); rule != "" {
+		if rule := b.blocklist.Match(host); rule != "" {
 			b.logger.Info("destination blocked", "target", target, "rule", rule)
 			respond(local, http.StatusForbidden, "destination domain blocked")
 			return

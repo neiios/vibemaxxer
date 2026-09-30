@@ -1,4 +1,4 @@
-package main
+package domain
 
 import (
 	"os"
@@ -9,47 +9,57 @@ import (
 
 func writeFile(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "blocklist.txt")
+	path := filepath.Join(t.TempDir(), "rules.txt")
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-func TestLoadBlocklist(t *testing.T) {
-	list, err := loadBlocklist(writeFile(t, "# comment\n\n  Example.COM. \ntelemetry.vendor.com\nexample.com\nxn--bcher-kva.example\n"))
+func TestLoad(t *testing.T) {
+	list, err := Load(writeFile(t, "# comment\n\n  Example.COM. \ntelemetry.vendor.com\nexample.com\nxn--bcher-kva.example\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(list) != 3 || !list["example.com"] || !list["telemetry.vendor.com"] || !list["xn--bcher-kva.example"] {
 		t.Fatalf("list %v", list)
 	}
-	if list, err := loadBlocklist(""); err != nil || list != nil {
+	if list, err := Load(""); err != nil || list != nil {
 		t.Fatalf("empty path: %v, %v", list, err)
 	}
-	if _, err := loadBlocklist(filepath.Join(t.TempDir(), "missing")); err == nil {
+	if _, err := Load(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("missing file accepted")
 	}
 	for _, bad := range []string{"https://example.com", "example.com:443", "*.example.com", "example.com # inline", "bücher.example", "*",
 		".example.com", "example..com", "example.com..", "1.2.3.4"} {
-		_, err := loadBlocklist(writeFile(t, "ok.example\n"+bad+"\n"))
+		_, err := Load(writeFile(t, "ok.example\n"+bad+"\n"))
 		if err == nil || !strings.Contains(err.Error(), ":2:") {
 			t.Errorf("%q: %v", bad, err)
 		}
 	}
 }
 
-func TestBlocklistMatch(t *testing.T) {
-	list := domainBlocklist{"example.com": true}
+func TestEmptyFileIsEmptyRules(t *testing.T) {
+	rules, err := Load(writeFile(t, "# comment\n\n"))
+	if err != nil || rules == nil || len(rules) != 0 {
+		t.Fatalf("empty file: %v, %v", rules, err)
+	}
+	if _, err := Parse("inline", "https://example.com\n"); err == nil {
+		t.Fatal("invalid rule accepted")
+	}
+}
+
+func TestMatch(t *testing.T) {
+	list := Rules{"example.com": true}
 	for host, want := range map[string]string{
 		"example.com": "example.com", "API.Example.com.": "example.com", "a.b.example.com": "example.com",
 		"notexample.com": "", "example.com.other.net": "", "com": "", "": "",
 	} {
-		if got := list.match(host); got != want {
+		if got := list.Match(host); got != want {
 			t.Errorf("%q: %q, want %q", host, got, want)
 		}
 	}
-	if domainBlocklist(nil).match("example.com") != "" {
+	if Rules(nil).Match("example.com") != "" {
 		t.Fatal("nil list matched")
 	}
 }

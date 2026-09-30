@@ -18,13 +18,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
 type managedConfig struct {
 	Server, ServerKey, Listen     string
 	Key                           []byte
-	Block, Domains                domainRules
+	Block, Domains                domain.Rules
 	BlockContents, DomainContents []byte
 	Ports                         map[int]bool
 	Grace                         time.Duration
@@ -80,7 +81,7 @@ func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports 
 	return c, nil
 }
 
-func snapshotRules(path string) (domainRules, []byte, error) {
+func snapshotRules(path string) (domain.Rules, []byte, error) {
 	if path == "" {
 		return nil, nil, nil
 	}
@@ -88,7 +89,7 @@ func snapshotRules(path string) (domainRules, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	rules, err := parseDomainRules(path, string(data))
+	rules, err := domain.Parse(path, string(data))
 	return rules, data, err
 }
 

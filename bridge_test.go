@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
-func testBridge(t *testing.T, serverAddress string, serverKey string, list domainBlocklist) (address string, logs *logBuffer) {
+func testBridge(t *testing.T, serverAddress string, serverKey string, list domain.Rules) (address string, logs *logBuffer) {
 	t.Helper()
 	client := testIdentity(t)
 	logger, logs := testLogger()
@@ -19,7 +20,7 @@ func testBridge(t *testing.T, serverAddress string, serverKey string, list domai
 	return startBridge(t, b), logs
 }
 
-func testPair(t *testing.T, list domainBlocklist, ports ...int) (bridgeAddress string, logs *logBuffer) {
+func testPair(t *testing.T, list domain.Rules, ports ...int) (bridgeAddress string, logs *logBuffer) {
 	t.Helper()
 	server, client := testIdentity(t), testIdentity(t)
 	allowed := map[int]bool{443: true}
@@ -54,7 +55,7 @@ func TestBridgeEndToEnd(t *testing.T) {
 }
 
 func TestBridgeBlocklist(t *testing.T) {
-	list := domainBlocklist{"blocked.example": true}
+	list := domain.Rules{"blocked.example": true}
 	closed, _ := closedPort(t)
 	address, logs := testBridge(t, closed, strings.Repeat("0", 64), list)
 	for _, target := range []string{"blocked.example:443", "api.BLOCKED.example.:443"} {
