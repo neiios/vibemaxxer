@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+
+	"github.com/neiios/vibemaxxer/internal/managed"
 )
 
 func main() {
@@ -31,7 +33,7 @@ func run(logger *slog.Logger, args []string) error {
 		if len(args) != 2 {
 			return errors.New("internal managed invocation")
 		}
-		return runManaged(args[1])
+		return managed.Run(args[1])
 	case "key":
 		return runKey(args[1:], os.Stdout)
 	case "serve":

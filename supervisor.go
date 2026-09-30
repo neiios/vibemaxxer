@@ -8,13 +8,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"github.com/neiios/vibemaxxer/internal/managed"
 )
 
 type commandExit struct{ code int }
 
 func (e commandExit) Error() string { return fmt.Sprintf("command exited with status %d", e.code) }
 
-func supervise(args []string, lease *bridgeLease) error {
+func supervise(args []string, lease *managed.Lease) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = proxyEnv(os.Environ(), lease.Address)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr

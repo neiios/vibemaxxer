@@ -18,6 +18,7 @@ import (
 
 	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
+	"github.com/neiios/vibemaxxer/internal/managed"
 	"github.com/neiios/vibemaxxer/internal/proxy"
 )
 
@@ -216,11 +217,11 @@ func runRun(args []string) error {
 		if explicitBridge {
 			return errors.New("-bridge cannot be combined with managed mode flags")
 		}
-		c, err := managedSnapshot(*server, *pin, *listen, *key, *block, *domains, *ports, *grace)
+		c, err := managed.Snapshot(*server, *pin, *listen, *key, *block, *domains, *ports, *grace)
 		if err != nil {
 			return err
 		}
-		lease, err := acquireBridge(c, *runtime, *timeout)
+		lease, err := managed.Acquire(c, *runtime, *timeout)
 		if err != nil {
 			return err
 		}
