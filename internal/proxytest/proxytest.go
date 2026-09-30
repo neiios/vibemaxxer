@@ -1,4 +1,5 @@
-package main
+// Package proxytest holds fixtures shared by tests that talk to a CONNECT proxy.
+package proxytest
 
 import (
 	"bufio"
@@ -17,29 +18,29 @@ import (
 	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
-type logBuffer struct {
+type LogBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (l *logBuffer) Write(p []byte) (int, error) {
+func (l *LogBuffer) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.Write(p)
 }
 
-func (l *logBuffer) String() string {
+func (l *LogBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.String()
 }
 
-func testLogger() (*slog.Logger, *logBuffer) {
-	buf := &logBuffer{}
+func Logger() (*slog.Logger, *LogBuffer) {
+	buf := &LogBuffer{}
 	return slog.New(slog.NewTextHandler(buf, nil)), buf
 }
 
-func testIdentity(t *testing.T) *identity.Identity {
+func Identity(t *testing.T) *identity.Identity {
 	t.Helper()
 	id, err := identity.Load(filepath.Join(t.TempDir(), "identity.pem"))
 	if err != nil {
@@ -48,24 +49,7 @@ func testIdentity(t *testing.T) *identity.Identity {
 	return id
 }
 
-func startServer(t *testing.T, id *identity.Identity, clients map[string]bool, ports map[int]bool, allowPrivate bool, logger *slog.Logger) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := newProxy(ports, logger)
-	p.allowPrivate = allowPrivate
-	server := &http.Server{Handler: p, ReadHeaderTimeout: headerTimeout,
-		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
-	server.Protocols = new(http.Protocols)
-	server.Protocols.SetHTTP1(true)
-	go server.Serve(tls.NewListener(listener, id.ServerTLS(clients)))
-	t.Cleanup(func() { server.Close() })
-	return listener.Addr().String()
-}
-
-func echoServer(t *testing.T) (address string, port int) {
+func EchoServer(t *testing.T) (address string, port int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -87,18 +71,7 @@ func echoServer(t *testing.T) (address string, port int) {
 	return listener.Addr().String(), listener.Addr().(*net.TCPAddr).Port
 }
 
-func startBridge(t *testing.T, b *bridge) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go b.serve(listener)
-	t.Cleanup(func() { listener.Close() })
-	return listener.Addr().String()
-}
-
-func connect(t *testing.T, address string, config *tls.Config, request, early string) (net.Conn, *bufio.Reader, int) {
+func Connect(t *testing.T, address string, config *tls.Config, request, early string) (net.Conn, *bufio.Reader, int) {
 	t.Helper()
 	var conn net.Conn
 	var err error
@@ -126,11 +99,11 @@ func connect(t *testing.T, address string, config *tls.Config, request, early st
 	return conn, reader, response.StatusCode
 }
 
-func connectRequest(target string) string {
+func ConnectRequest(target string) string {
 	return "CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"
 }
 
-func assertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, alreadySent, payload string) {
+func AssertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, alreadySent, payload string) {
 	t.Helper()
 	if _, err := io.WriteString(conn, payload); err != nil {
 		t.Fatal(err)
@@ -147,7 +120,7 @@ func assertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, alreadySent, 
 	}
 }
 
-func closedPort(t *testing.T) (address string, port int) {
+func ClosedPort(t *testing.T) (address string, port int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -157,7 +130,7 @@ func closedPort(t *testing.T) (address string, port int) {
 	return listener.Addr().String(), listener.Addr().(*net.TCPAddr).Port
 }
 
-func waitForLog(t *testing.T, logs *logBuffer, want string) {
+func WaitForLog(t *testing.T, logs *LogBuffer, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(logs.String(), want) {

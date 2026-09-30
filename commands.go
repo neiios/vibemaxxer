@@ -8,18 +8,17 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
+	"github.com/neiios/vibemaxxer/internal/proxy"
 )
 
 type repeatable []string
@@ -32,15 +31,6 @@ func (r *repeatable) Set(value string) error {
 
 func keyFlag(flags *flag.FlagSet) *string {
 	return flags.String("key", identity.DefaultKeyPath(), "Ed25519 identity file, created on first use")
-}
-
-func validEndpoint(address string) error {
-	host, portText, err := net.SplitHostPort(address)
-	port, portErr := strconv.Atoi(portText)
-	if err != nil || host == "" || portErr != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("%q must be HOST:PORT", address)
-	}
-	return nil
 }
 
 func runKey(args []string, out io.Writer) error {
@@ -85,7 +75,7 @@ func runServe(logger *slog.Logger, args []string) error {
 		}
 		clients[key] = true
 	}
-	ports, err := parsePorts(*portsFlag)
+	ports, err := proxy.ParsePorts(*portsFlag)
 	if err != nil {
 		return err
 	}
@@ -93,26 +83,19 @@ func runServe(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	handler := newProxy(ports, logger)
-	if err := handler.refuseLocalPrefixes(); err != nil {
+	handler := proxy.NewServer(ports, logger)
+	if err := handler.RefuseLocalPrefixes(); err != nil {
 		return err
 	}
 	listener, err := net.Listen("tcp", bind.String())
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: headerTimeout,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
-	server.Protocols = new(http.Protocols)
-	server.Protocols.SetHTTP1(true)
-	logger.Info("serving", "address", listener.Addr(), "identity", id.Fingerprint(), "ports", *portsFlag, "local_prefixes", handler.local)
+	logger.Info("serving", "address", listener.Addr(), "identity", id.Fingerprint(), "ports", *portsFlag, "local_prefixes", handler.LocalPrefixes())
 	for key := range clients {
 		logger.Info("allowed client", "identity", key)
 	}
-	return server.Serve(tls.NewListener(listener, id.ServerTLS(clients)))
+	return handler.HTTPServer().Serve(tls.NewListener(listener, id.ServerTLS(clients)))
 }
 
 func runBridge(logger *slog.Logger, args []string) error {
@@ -127,7 +110,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err := parseNoArgs(flags, args); err != nil {
 		return err
 	}
-	if err := validEndpoint(*server); err != nil {
+	if err := proxy.ValidEndpoint(*server); err != nil {
 		return fmt.Errorf("-server %w", err)
 	}
 	key, err := identity.ParseFingerprint(*serverKey)
@@ -142,7 +125,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return fmt.Errorf("-proxy-domains: %w", err)
 	}
-	directPorts, err := parsePorts(*directPortsFlag)
+	directPorts, err := proxy.ParsePorts(*directPortsFlag)
 	if err != nil {
 		return fmt.Errorf("-direct-ports: %w", err)
 	}
@@ -154,19 +137,19 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	direct := newProxy(directPorts, logger)
-	if err := direct.refuseLocalPrefixes(); err != nil {
+	direct := proxy.NewServer(directPorts, logger)
+	if err := direct.RefuseLocalPrefixes(); err != nil {
 		return err
 	}
 	listener, err := net.Listen("tcp", bind.String())
 	if err != nil {
 		return err
 	}
-	b := &bridge{server: *server, tlsConfig: id.ClientTLS(key), blocklist: blocklist,
-		proxyDomains: proxyDomains, direct: direct, logger: logger}
-	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.Fingerprint(), "server", *server, "blocklist_rules", len(blocklist), "local_prefixes", direct.local)
-	go b.probe()
-	return b.serve(listener)
+	b := &proxy.Bridge{Upstream: *server, TLSConfig: id.ClientTLS(key), Blocklist: blocklist,
+		ProxyDomains: proxyDomains, Direct: direct, Logger: logger}
+	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.Fingerprint(), "server", *server, "blocklist_rules", len(blocklist), "local_prefixes", direct.LocalPrefixes())
+	go b.Probe()
+	return b.Serve(listener)
 }
 
 var proxyVariables = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"}

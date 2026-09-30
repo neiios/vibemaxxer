@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"crypto/tls"
@@ -7,58 +7,61 @@ import (
 	"net/http"
 	"net/netip"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
 func testServer(t *testing.T, allowPrivate bool, ports ...int) (address string, config *tls.Config) {
 	t.Helper()
-	server, client := testIdentity(t), testIdentity(t)
+	server, client := proxytest.Identity(t), proxytest.Identity(t)
 	allowed := map[int]bool{443: true}
 	for _, port := range ports {
 		allowed[port] = true
 	}
-	logger, _ := testLogger()
+	logger, _ := proxytest.Logger()
 	address = startServer(t, server, map[string]bool{client.Fingerprint(): true}, allowed, allowPrivate, logger)
 	return address, client.ClientTLS(server.Fingerprint())
 }
 
 func TestConnectRejections(t *testing.T) {
-	closed, port := closedPort(t)
+	closed, port := proxytest.ClosedPort(t)
 	address, config := testServer(t, true, port)
 	cases := map[string]int{
-		"GET / HTTP/1.1\r\nHost: x\r\n\r\n":       http.StatusMethodNotAllowed,
-		connectRequest("example.com:22"):          http.StatusForbidden,
-		connectRequest("nonsense"):                http.StatusBadRequest,
-		connectRequest(":443"):                    http.StatusBadRequest,
-		connectRequest("example.com:0"):           http.StatusBadRequest,
-		connectRequest(closed):                    http.StatusBadGateway,
-		"CONNECT " + closed + " HTTP/1.1\r\n\r\n": http.StatusBadGateway,
+		"GET / HTTP/1.1\r\nHost: x\r\n\r\n":        http.StatusMethodNotAllowed,
+		proxytest.ConnectRequest("example.com:22"): http.StatusForbidden,
+		proxytest.ConnectRequest("nonsense"):       http.StatusBadRequest,
+		proxytest.ConnectRequest(":443"):           http.StatusBadRequest,
+		proxytest.ConnectRequest("example.com:0"):  http.StatusBadRequest,
+		proxytest.ConnectRequest(closed):           http.StatusBadGateway,
+		"CONNECT " + closed + " HTTP/1.1\r\n\r\n":  http.StatusBadGateway,
 	}
 	for request, want := range cases {
-		if _, _, got := connect(t, address, config, request, ""); got != want {
+		if _, _, got := proxytest.Connect(t, address, config, request, ""); got != want {
 			t.Errorf("%q: status %d, want %d", request, got, want)
 		}
 	}
 }
 
 func TestTunnelEchoWithEarlyDataAndHalfClose(t *testing.T) {
-	target, port := echoServer(t)
+	target, port := proxytest.EchoServer(t)
 	address, config := testServer(t, true, port)
-	conn, reader, status := connect(t, address, config, connectRequest(target), "early")
+	conn, reader, status := proxytest.Connect(t, address, config, proxytest.ConnectRequest(target), "early")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	assertEcho(t, conn, reader, "early", " and later")
+	proxytest.AssertEcho(t, conn, reader, "early", " and later")
 }
 
 func TestPrivateDestinationsBlockedByDefault(t *testing.T) {
-	target, port := echoServer(t)
+	target, port := proxytest.EchoServer(t)
 	address, config := testServer(t, false, port)
-	if _, _, status := connect(t, address, config, connectRequest(target), ""); status != http.StatusForbidden {
+	if _, _, status := proxytest.Connect(t, address, config, proxytest.ConnectRequest(target), ""); status != http.StatusForbidden {
 		t.Fatalf("loopback destination status %d", status)
 	}
-	if _, _, status := connect(t, address, config, connectRequest("localhost:"+strconv.Itoa(port)), ""); status != http.StatusForbidden {
+	if _, _, status := proxytest.Connect(t, address, config, proxytest.ConnectRequest("localhost:"+strconv.Itoa(port)), ""); status != http.StatusForbidden {
 		t.Fatalf("resolved loopback destination status %d", status)
 	}
 }
@@ -81,12 +84,12 @@ func TestPublicDestinationPolicy(t *testing.T) {
 }
 
 func TestParsePorts(t *testing.T) {
-	ports, err := parsePorts("443, 8443")
+	ports, err := ParsePorts("443, 8443")
 	if err != nil || !ports[443] || !ports[8443] || len(ports) != 2 {
 		t.Fatalf("ports %v, %v", ports, err)
 	}
 	for _, bad := range []string{"", "0", "65536", "https", "443,,8443"} {
-		if _, err := parsePorts(bad); err == nil {
+		if _, err := ParsePorts(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}
@@ -123,7 +126,7 @@ func TestTunnelUpstreamHalfClose(t *testing.T) {
 	}()
 	port := listener.Addr().(*net.TCPAddr).Port
 	address, config := testServer(t, true, port)
-	conn, reader, status := connect(t, address, config, connectRequest(listener.Addr().String()), "")
+	conn, reader, status := proxytest.Connect(t, address, config, proxytest.ConnectRequest(listener.Addr().String()), "")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
@@ -155,7 +158,7 @@ func TestTunnelUpstreamHalfClose(t *testing.T) {
 }
 
 func TestLocalPrefixesRefused(t *testing.T) {
-	p := &proxy{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
+	p := &Server{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
 	for addr, want := range map[string]bool{
 		"2001:db8:1::10": false, "203.0.113.7": false,
 		"2001:db8:2::10": true, "1.1.1.1": true,
@@ -177,4 +180,39 @@ func TestLocalPrefixesRefused(t *testing.T) {
 		}
 	}
 	t.Fatalf("loopback missing from %v", prefixes)
+}
+
+func TestMutualPinning(t *testing.T) {
+	server, client, stranger := proxytest.Identity(t), proxytest.Identity(t), proxytest.Identity(t)
+	logger, logs := proxytest.Logger()
+	address := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{443: true}, false, logger)
+
+	_, _, status := proxytest.Connect(t, address, client.ClientTLS(server.Fingerprint()), "GET / HTTP/1.1\r\nHost: x\r\n\r\n", "")
+	if status != http.StatusMethodNotAllowed {
+		t.Fatalf("authenticated GET status %d", status)
+	}
+
+	_, err := tls.Dial("tcp", address, client.ClientTLS(stranger.Fingerprint()))
+	if err == nil || !strings.Contains(err.Error(), server.Fingerprint()) {
+		t.Fatalf("wrong server pin: %v", err)
+	}
+
+	conn, err := tls.Dial("tcp", address, stranger.ClientTLS(server.Fingerprint()))
+	if err == nil {
+		io.WriteString(conn, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+		_, err = conn.Read(make([]byte, 1))
+		conn.Close()
+	}
+	if err == nil {
+		t.Fatal("unknown client accepted")
+	}
+	proxytest.WaitForLog(t, logs, "-client-key "+stranger.Fingerprint())
+
+	response, err := http.Get("http://" + address)
+	if err == nil {
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("plaintext status %d", response.StatusCode)
+		}
+	}
 }

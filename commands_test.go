@@ -8,13 +8,15 @@ import (
 	"testing"
 
 	"github.com/neiios/vibemaxxer/internal/identity"
+
+	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
 func TestFlagValidation(t *testing.T) {
-	logger, _ := testLogger()
+	logger, _ := proxytest.Logger()
 	key := filepath.Join(t.TempDir(), "id.pem")
 	fp := strings.Repeat("ab", 32)
-	closed, _ := closedPort(t)
+	closed, _ := proxytest.ClosedPort(t)
 	for _, args := range [][]string{
 		{"serve"},
 		{"serve", "-listen", "127.0.0.1:0"},
@@ -46,7 +48,7 @@ func TestFlagValidation(t *testing.T) {
 }
 
 func TestErrorsNameFlags(t *testing.T) {
-	logger, _ := testLogger()
+	logger, _ := proxytest.Logger()
 	key := filepath.Join(t.TempDir(), "id.pem")
 	fp := strings.Repeat("ab", 32)
 	for _, tc := range []struct {

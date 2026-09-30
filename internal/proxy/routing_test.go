@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"net/http"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/neiios/vibemaxxer/internal/domain"
+	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
 func TestDomainRouting(t *testing.T) {
@@ -18,41 +19,41 @@ func TestDomainRouting(t *testing.T) {
 		{"notexample.com", true}, {"example.com.evil", true},
 		{"127.0.0.1", true}, {"::1", true},
 	} {
-		b := &bridge{proxyDomains: domain.Rules{"example.com": true, "127.0.0.1": true}}
+		b := &Bridge{ProxyDomains: domain.Rules{"example.com": true, "127.0.0.1": true}}
 		if got := b.routeDirect(tc.host); got != tc.direct {
 			t.Errorf("%s: direct=%v", tc.host, got)
 		}
 	}
-	if (&bridge{}).routeDirect("example.com") {
+	if (&Bridge{}).routeDirect("example.com") {
 		t.Fatal("default must proxy everything")
 	}
-	if !(&bridge{proxyDomains: domain.Rules{}}).routeDirect("example.com") {
+	if !(&Bridge{ProxyDomains: domain.Rules{}}).routeDirect("example.com") {
 		t.Fatal("empty list must route directly")
 	}
 }
 
 func TestDirectRoutingEndToEnd(t *testing.T) {
-	target, port := echoServer(t)
-	closed, _ := closedPort(t)
-	logger, logs := testLogger()
-	b := &bridge{server: closed, proxyDomains: domain.Rules{}, logger: logger,
-		direct: &proxy{ports: map[int]bool{port: true}, allowPrivate: true}}
+	target, port := proxytest.EchoServer(t)
+	closed, _ := proxytest.ClosedPort(t)
+	logger, logs := proxytest.Logger()
+	b := &Bridge{Upstream: closed, ProxyDomains: domain.Rules{}, Logger: logger,
+		Direct: &Server{ports: map[int]bool{port: true}, allowPrivate: true}}
 	address := startBridge(t, b)
-	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")
+	conn, reader, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest(target), "early")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	assertEcho(t, conn, reader, "early", " and later")
+	proxytest.AssertEcho(t, conn, reader, "early", " and later")
 	if !strings.Contains(logs.String(), "route=direct") {
 		t.Fatal("route not logged")
 	}
 }
 
 func TestRoutingRestrictions(t *testing.T) {
-	closed, _ := closedPort(t)
-	logger, _ := testLogger()
-	b := &bridge{server: closed, proxyDomains: domain.Rules{"localhost": true},
-		blocklist: domain.Rules{"blocked.example": true}, logger: logger}
+	closed, _ := proxytest.ClosedPort(t)
+	logger, _ := proxytest.Logger()
+	b := &Bridge{Upstream: closed, ProxyDomains: domain.Rules{"localhost": true},
+		Blocklist: domain.Rules{"blocked.example": true}, Direct: NewServer(map[int]bool{443: true}, logger), Logger: logger}
 	address := startBridge(t, b)
 	for _, tc := range []struct {
 		target string
@@ -63,25 +64,25 @@ func TestRoutingRestrictions(t *testing.T) {
 		{"127.0.0.1:443", http.StatusForbidden},
 		{"127.0.0.1:22", http.StatusForbidden},
 	} {
-		if _, _, status := connect(t, address, nil, connectRequest(tc.target), ""); status != tc.status {
+		if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest(tc.target), ""); status != tc.status {
 			t.Errorf("%s: status %d, want %d", tc.target, status, tc.status)
 		}
 	}
 }
 
 func TestMatchedDomainUsesServer(t *testing.T) {
-	_, port := echoServer(t)
-	server, client := testIdentity(t), testIdentity(t)
-	logger, logs := testLogger()
+	_, port := proxytest.EchoServer(t)
+	server, client := proxytest.Identity(t), proxytest.Identity(t)
+	logger, logs := proxytest.Logger()
 	upstream := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{port: true}, true, logger)
-	b := &bridge{server: upstream, tlsConfig: client.ClientTLS(server.Fingerprint()), proxyDomains: domain.Rules{"localhost": true}, logger: logger}
+	b := &Bridge{Upstream: upstream, TLSConfig: client.ClientTLS(server.Fingerprint()), ProxyDomains: domain.Rules{"localhost": true}, Logger: logger}
 	address := startBridge(t, b)
 	target := "localhost:" + strconv.Itoa(port)
-	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")
+	conn, reader, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest(target), "early")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	assertEcho(t, conn, reader, "early", " later")
+	proxytest.AssertEcho(t, conn, reader, "early", " later")
 	if !strings.Contains(logs.String(), "route=server") {
 		t.Fatal("route not logged")
 	}

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
 func TestMain(m *testing.M) {
@@ -80,7 +82,7 @@ func managedFixture(t *testing.T) (managedConfig, string) {
 		}
 	}
 	key := filepath.Join(root, "identity.pem")
-	server, _ := closedPort(t)
+	server, _ := proxytest.ClosedPort(t)
 	c, err := managedSnapshot(server, strings.Repeat("ab", 32), "127.0.0.1:0", key, "", "", "443", 200*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -260,11 +262,11 @@ func TestManagedConfigSnapshots(t *testing.T) {
 	if a.Address == b.Address {
 		t.Fatal("different configs shared listener")
 	}
-	_, _, status := connect(t, a.Address, nil, connectRequest("blocked.example:443"), "")
+	_, _, status := proxytest.Connect(t, a.Address, nil, proxytest.ConnectRequest("blocked.example:443"), "")
 	if status != 403 {
 		t.Fatalf("snapshot blocklist changed: %d", status)
 	}
-	conn, _, status := connect(t, a.Address, nil, connectRequest("vpn.example:443"), "")
+	conn, _, status := proxytest.Connect(t, a.Address, nil, proxytest.ConnectRequest("vpn.example:443"), "")
 	conn.Close()
 	if status != 502 {
 		t.Fatalf("VPN route did not fail closed: %d", status)

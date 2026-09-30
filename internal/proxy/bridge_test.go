@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"crypto/tls"
@@ -10,74 +10,75 @@ import (
 
 	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
+	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
-func testBridge(t *testing.T, serverAddress string, serverKey string, list domain.Rules) (address string, logs *logBuffer) {
+func testBridge(t *testing.T, serverAddress string, serverKey string, list domain.Rules) (address string, logs *proxytest.LogBuffer) {
 	t.Helper()
-	client := testIdentity(t)
-	logger, logs := testLogger()
-	b := &bridge{server: serverAddress, tlsConfig: client.ClientTLS(serverKey), blocklist: list, logger: logger}
+	client := proxytest.Identity(t)
+	logger, logs := proxytest.Logger()
+	b := &Bridge{Upstream: serverAddress, TLSConfig: client.ClientTLS(serverKey), Blocklist: list, Logger: logger}
 	return startBridge(t, b), logs
 }
 
-func testPair(t *testing.T, list domain.Rules, ports ...int) (bridgeAddress string, logs *logBuffer) {
+func testPair(t *testing.T, list domain.Rules, ports ...int) (bridgeAddress string, logs *proxytest.LogBuffer) {
 	t.Helper()
-	server, client := testIdentity(t), testIdentity(t)
+	server, client := proxytest.Identity(t), proxytest.Identity(t)
 	allowed := map[int]bool{443: true}
 	for _, port := range ports {
 		allowed[port] = true
 	}
-	serverLogger, _ := testLogger()
+	serverLogger, _ := proxytest.Logger()
 	serverAddress := startServer(t, server, map[string]bool{client.Fingerprint(): true}, allowed, true, serverLogger)
-	logger, logs := testLogger()
-	b := &bridge{server: serverAddress, tlsConfig: client.ClientTLS(server.Fingerprint()), blocklist: list, logger: logger}
+	logger, logs := proxytest.Logger()
+	b := &Bridge{Upstream: serverAddress, TLSConfig: client.ClientTLS(server.Fingerprint()), Blocklist: list, Logger: logger}
 	return startBridge(t, b), logs
 }
 
 func TestBridgeEndToEnd(t *testing.T) {
-	target, port := echoServer(t)
+	target, port := proxytest.EchoServer(t)
 	address, _ := testPair(t, nil, port)
-	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")
+	conn, reader, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest(target), "early")
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	assertEcho(t, conn, reader, "early", " and later")
+	proxytest.AssertEcho(t, conn, reader, "early", " and later")
 
-	if _, _, status := connect(t, address, nil, connectRequest("127.0.0.1:22"), ""); status != http.StatusForbidden {
+	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("127.0.0.1:22"), ""); status != http.StatusForbidden {
 		t.Fatalf("disallowed port status %d", status)
 	}
-	if _, _, status := connect(t, address, nil, "GET / HTTP/1.1\r\nHost: x\r\n\r\n", ""); status != http.StatusMethodNotAllowed {
+	if _, _, status := proxytest.Connect(t, address, nil, "GET / HTTP/1.1\r\nHost: x\r\n\r\n", ""); status != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status %d", status)
 	}
-	if _, _, status := connect(t, address, nil, connectRequest("nonsense"), ""); status != http.StatusBadRequest {
+	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("nonsense"), ""); status != http.StatusBadRequest {
 		t.Fatalf("bad target status %d", status)
 	}
 }
 
 func TestBridgeBlocklist(t *testing.T) {
 	list := domain.Rules{"blocked.example": true}
-	closed, _ := closedPort(t)
+	closed, _ := proxytest.ClosedPort(t)
 	address, logs := testBridge(t, closed, strings.Repeat("0", 64), list)
 	for _, target := range []string{"blocked.example:443", "api.BLOCKED.example.:443"} {
-		if _, _, status := connect(t, address, nil, connectRequest(target), ""); status != http.StatusForbidden {
+		if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest(target), ""); status != http.StatusForbidden {
 			t.Fatalf("%s: status %d", target, status)
 		}
 	}
 	if !strings.Contains(logs.String(), "rule=blocked.example") {
 		t.Fatalf("block not logged:\n%s", logs.String())
 	}
-	if _, _, status := connect(t, address, nil, connectRequest("notblocked.example:443"), ""); status != http.StatusBadGateway {
+	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("notblocked.example:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("unblocked status %d", status)
 	}
 }
 
 func TestBridgeReportsUpstreamFailures(t *testing.T) {
-	server, client := testIdentity(t), testIdentity(t)
-	logger, _ := testLogger()
+	server, client := proxytest.Identity(t), proxytest.Identity(t)
+	logger, _ := proxytest.Logger()
 	serverAddress := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{443: true}, true, logger)
 
 	address, logs := testBridge(t, serverAddress, strings.Repeat("0", 64), nil)
-	if _, _, status := connect(t, address, nil, connectRequest("example.com:443"), ""); status != http.StatusBadGateway {
+	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("example.com:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("wrong pin status %d", status)
 	}
 	if !strings.Contains(logs.String(), server.Fingerprint()) {
@@ -85,16 +86,16 @@ func TestBridgeReportsUpstreamFailures(t *testing.T) {
 	}
 
 	address, _ = testBridge(t, serverAddress, server.Fingerprint(), nil)
-	if _, _, status := connect(t, address, nil, connectRequest("example.com:443"), ""); status != http.StatusBadGateway {
+	if _, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("example.com:443"), ""); status != http.StatusBadGateway {
 		t.Fatalf("unpaired status %d", status)
 	}
 }
 
 func TestProbeDistinguishesOutcomes(t *testing.T) {
-	server, client, stranger := testIdentity(t), testIdentity(t), testIdentity(t)
-	serverLogger, _ := testLogger()
+	server, client, stranger := proxytest.Identity(t), proxytest.Identity(t), proxytest.Identity(t)
+	serverLogger, _ := proxytest.Logger()
 	serverAddress := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{443: true}, true, serverLogger)
-	closed, _ := closedPort(t)
+	closed, _ := proxytest.ClosedPort(t)
 	for _, c := range []struct {
 		name, server, pin string
 		id                *identity.Identity
@@ -105,9 +106,9 @@ func TestProbeDistinguishesOutcomes(t *testing.T) {
 		{"wrong pin", serverAddress, stranger.Fingerprint(), client, "upstream check failed"},
 		{"unreachable", closed, server.Fingerprint(), client, "upstream check failed"},
 	} {
-		logger, logs := testLogger()
-		b := &bridge{server: c.server, tlsConfig: c.id.ClientTLS(c.pin), logger: logger}
-		b.probe()
+		logger, logs := proxytest.Logger()
+		b := &Bridge{Upstream: c.server, TLSConfig: c.id.ClientTLS(c.pin), Logger: logger}
+		b.Probe()
 		if !strings.Contains(logs.String(), c.want) {
 			t.Errorf("%s: want %q in log:\n%s", c.name, c.want, logs.String())
 		}
@@ -118,7 +119,7 @@ func TestBridgeBoundsUpstreamReply(t *testing.T) {
 	saved := upstreamReplyTimeout
 	upstreamReplyTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { upstreamReplyTimeout = saved })
-	server, client := testIdentity(t), testIdentity(t)
+	server, client := proxytest.Identity(t), proxytest.Identity(t)
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -139,10 +140,10 @@ func TestBridgeBoundsUpstreamReply(t *testing.T) {
 		_, _ = conn.Read(make([]byte, 1024))
 		<-done
 	}()
-	logger, logs := testLogger()
-	address := startBridge(t, &bridge{server: raw.Addr().String(), tlsConfig: client.ClientTLS(server.Fingerprint()), logger: logger})
+	logger, logs := proxytest.Logger()
+	address := startBridge(t, &Bridge{Upstream: raw.Addr().String(), TLSConfig: client.ClientTLS(server.Fingerprint()), Logger: logger})
 	started := time.Now()
-	_, _, status := connect(t, address, nil, connectRequest("example.com:443"), "")
+	_, _, status := proxytest.Connect(t, address, nil, proxytest.ConnectRequest("example.com:443"), "")
 	if status != http.StatusGatewayTimeout {
 		t.Fatalf("status %d", status)
 	}

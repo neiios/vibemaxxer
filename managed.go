@@ -20,6 +20,7 @@ import (
 
 	"github.com/neiios/vibemaxxer/internal/domain"
 	"github.com/neiios/vibemaxxer/internal/identity"
+	"github.com/neiios/vibemaxxer/internal/proxy"
 )
 
 type managedConfig struct {
@@ -40,7 +41,7 @@ func (c managedConfig) digest() string {
 
 func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports string, grace time.Duration) (managedConfig, error) {
 	c := managedConfig{Server: server, Listen: listen, Grace: grace}
-	if err := validEndpoint(server); err != nil {
+	if err := proxy.ValidEndpoint(server); err != nil {
 		return c, fmt.Errorf("-server %w", err)
 	}
 	var err error
@@ -54,7 +55,7 @@ func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports 
 	if grace < 100*time.Millisecond || grace > time.Minute {
 		return c, errors.New("-grace must be between 100ms and 1m")
 	}
-	if c.Ports, err = parsePorts(ports); err != nil {
+	if c.Ports, err = proxy.ParsePorts(ports); err != nil {
 		return c, fmt.Errorf("-direct-ports: %w", err)
 	}
 	if c.Block, c.BlockContents, err = snapshotRules(blockPath); err != nil {
@@ -333,8 +334,8 @@ func runManaged(base string) error {
 	if err != nil {
 		return err
 	}
-	direct := newProxy(c.Ports, logger)
-	if err := direct.refuseLocalPrefixes(); err != nil {
+	direct := proxy.NewServer(c.Ports, logger)
+	if err := direct.RefuseLocalPrefixes(); err != nil {
 		return err
 	}
 	tcp, err := net.Listen("tcp", c.Listen)
@@ -361,19 +362,19 @@ func runManaged(base string) error {
 	if err := os.Chmod(base+".sock", 0600); err != nil {
 		return err
 	}
-	b := &bridge{server: c.Server, tlsConfig: id.ClientTLS(c.ServerKey), blocklist: c.Block, proxyDomains: c.Domains, direct: direct, logger: logger}
-	logger.Info("managed bridge listening", "address", tcp.Addr(), "log", base+".log", "local_prefixes", direct.local)
-	go b.probe()
+	b := &proxy.Bridge{Upstream: c.Server, TLSConfig: id.ClientTLS(c.ServerKey), Blocklist: c.Block, ProxyDomains: c.Domains, Direct: direct, Logger: logger}
+	logger.Info("managed bridge listening", "address", tcp.Addr(), "log", base+".log", "local_prefixes", direct.LocalPrefixes())
+	go b.Probe()
 	return serveManaged(control, tcp, b, base+".lock", c.Grace)
 }
 
-func serveManaged(control *net.UnixListener, tcp net.Listener, b *bridge, gatePath string, grace time.Duration) error {
+func serveManaged(control *net.UnixListener, tcp net.Listener, b *proxy.Bridge, gatePath string, grace time.Duration) error {
 	var mu sync.Mutex
 	count := 0
 	idle := time.Now()
 	stopping := false
 	failures := make(chan error, 2)
-	go func() { failures <- b.serve(tcp) }()
+	go func() { failures <- b.Serve(tcp) }()
 	go func() {
 		for {
 			conn, err := control.AcceptUnix()
@@ -432,7 +433,7 @@ func serveManaged(control *net.UnixListener, tcp net.Listener, b *bridge, gatePa
 			mu.Unlock()
 			unlock(gate)
 			if done {
-				b.logger.Info("last lease released; shutting down")
+				b.Logger.Info("last lease released; shutting down")
 				return nil
 			}
 		}
