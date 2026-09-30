@@ -19,8 +19,8 @@ func testServer(t *testing.T, allowPrivate bool, ports ...int) (address string, 
 		allowed[port] = true
 	}
 	logger, _ := testLogger()
-	address = startServer(t, server, map[string]bool{client.fingerprint(): true}, allowed, allowPrivate, logger)
-	return address, client.clientTLS(server.fingerprint())
+	address = startServer(t, server, map[string]bool{client.Fingerprint(): true}, allowed, allowPrivate, logger)
+	return address, client.ClientTLS(server.Fingerprint())
 }
 
 func TestConnectRejections(t *testing.T) {

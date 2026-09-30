@@ -93,8 +93,8 @@ func TestMatchedDomainUsesServer(t *testing.T) {
 	_, port := echoServer(t)
 	server, client := testIdentity(t), testIdentity(t)
 	logger, logs := testLogger()
-	upstream := startServer(t, server, map[string]bool{client.fingerprint(): true}, map[int]bool{port: true}, true, logger)
-	b := &bridge{server: upstream, tlsConfig: client.clientTLS(server.fingerprint()), proxyDomains: domainRules{"localhost": true}, logger: logger}
+	upstream := startServer(t, server, map[string]bool{client.Fingerprint(): true}, map[int]bool{port: true}, true, logger)
+	b := &bridge{server: upstream, tlsConfig: client.ClientTLS(server.Fingerprint()), proxyDomains: domainRules{"localhost": true}, logger: logger}
 	address := startBridge(t, b)
 	target := "localhost:" + strconv.Itoa(port)
 	conn, reader, status := connect(t, address, nil, connectRequest(target), "early")

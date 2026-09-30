@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
 type managedConfig struct {
@@ -42,7 +43,7 @@ func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports 
 		return c, fmt.Errorf("-server %w", err)
 	}
 	var err error
-	if c.ServerKey, err = parseFingerprint(pin); err != nil {
+	if c.ServerKey, err = identity.ParseFingerprint(pin); err != nil {
 		return c, fmt.Errorf("-server-key: %w", err)
 	}
 	bind, err := netip.ParseAddrPort(listen)
@@ -61,11 +62,11 @@ func managedSnapshot(server, pin, listen, keyPath, blockPath, domainPath, ports 
 	if c.Domains, c.DomainContents, err = snapshotRules(domainPath); err != nil {
 		return c, fmt.Errorf("-proxy-domains: %w", err)
 	}
-	id, err := loadIdentity(keyPath)
+	id, err := identity.Load(keyPath)
 	if err != nil {
 		return c, err
 	}
-	c.Key = id.key
+	c.Key = id.Key()
 	f, err := os.Open("/proc/self/exe")
 	if err != nil {
 		return c, err
@@ -327,14 +328,10 @@ func runManaged(base string) error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if len(c.Key) != ed25519.PrivateKeySize {
-		return errors.New("invalid managed identity")
-	}
-	cert, err := selfSigned(ed25519.PrivateKey(c.Key))
+	id, err := identity.FromKey(c.Key)
 	if err != nil {
 		return err
 	}
-	id := &identity{key: ed25519.PrivateKey(c.Key), cert: cert}
 	direct := newProxy(c.Ports, logger)
 	if err := direct.refuseLocalPrefixes(); err != nil {
 		return err
@@ -363,7 +360,7 @@ func runManaged(base string) error {
 	if err := os.Chmod(base+".sock", 0600); err != nil {
 		return err
 	}
-	b := &bridge{server: c.Server, tlsConfig: id.clientTLS(c.ServerKey), blocklist: c.Block, proxyDomains: c.Domains, direct: direct, logger: logger}
+	b := &bridge{server: c.Server, tlsConfig: id.ClientTLS(c.ServerKey), blocklist: c.Block, proxyDomains: c.Domains, direct: direct, logger: logger}
 	logger.Info("managed bridge listening", "address", tcp.Addr(), "log", base+".log", "local_prefixes", direct.local)
 	go b.probe()
 	return serveManaged(control, tcp, b, base+".lock", c.Grace)

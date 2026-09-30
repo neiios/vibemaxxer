@@ -1,4 +1,4 @@
-package main
+package identity
 
 import (
 	"crypto/ed25519"
@@ -19,12 +19,12 @@ import (
 	"time"
 )
 
-type identity struct {
+type Identity struct {
 	key  ed25519.PrivateKey
 	cert tls.Certificate
 }
 
-func defaultKeyPath() string {
+func DefaultKeyPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
@@ -32,7 +32,7 @@ func defaultKeyPath() string {
 	return filepath.Join(dir, "vibemaxxer", "identity.pem")
 }
 
-func loadIdentity(path string) (*identity, error) {
+func Load(path string) (*Identity, error) {
 	if path == "" {
 		return nil, errors.New("cannot determine the configuration directory; pass -key FILE")
 	}
@@ -43,12 +43,21 @@ func loadIdentity(path string) (*identity, error) {
 	if err != nil {
 		return nil, err
 	}
+	return FromKey(key)
+}
+
+func FromKey(key ed25519.PrivateKey) (*Identity, error) {
+	if len(key) != ed25519.PrivateKeySize {
+		return nil, errors.New("invalid identity key")
+	}
 	cert, err := selfSigned(key)
 	if err != nil {
 		return nil, err
 	}
-	return &identity{key: key, cert: cert}, nil
+	return &Identity{key: key, cert: cert}, nil
 }
+
+func (id *Identity) Key() ed25519.PrivateKey { return id.key }
 
 func readKey(path string) (ed25519.PrivateKey, error) {
 	data, err := os.ReadFile(path)
@@ -129,11 +138,11 @@ func fingerprint(pub ed25519.PublicKey) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (id *identity) fingerprint() string {
+func (id *Identity) Fingerprint() string {
 	return fingerprint(id.key.Public().(ed25519.PublicKey))
 }
 
-func parseFingerprint(value string) (string, error) {
+func ParseFingerprint(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != sha256.Size {
@@ -153,7 +162,7 @@ func peerFingerprint(state tls.ConnectionState) (string, error) {
 	return fingerprint(pub), nil
 }
 
-func (id *identity) clientTLS(serverKey string) *tls.Config {
+func (id *Identity) ClientTLS(serverKey string) *tls.Config {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		Certificates:       []tls.Certificate{id.cert},
@@ -171,7 +180,7 @@ func (id *identity) clientTLS(serverKey string) *tls.Config {
 	}
 }
 
-func (id *identity) serverTLS(clients map[string]bool) *tls.Config {
+func (id *Identity) ServerTLS(clients map[string]bool) *tls.Config {
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{id.cert},

@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
 type logBuffer struct {
@@ -37,16 +39,16 @@ func testLogger() (*slog.Logger, *logBuffer) {
 	return slog.New(slog.NewTextHandler(buf, nil)), buf
 }
 
-func testIdentity(t *testing.T) *identity {
+func testIdentity(t *testing.T) *identity.Identity {
 	t.Helper()
-	id, err := loadIdentity(filepath.Join(t.TempDir(), "identity.pem"))
+	id, err := identity.Load(filepath.Join(t.TempDir(), "identity.pem"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func startServer(t *testing.T, id *identity, clients map[string]bool, ports map[int]bool, allowPrivate bool, logger *slog.Logger) string {
+func startServer(t *testing.T, id *identity.Identity, clients map[string]bool, ports map[int]bool, allowPrivate bool, logger *slog.Logger) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -58,7 +60,7 @@ func startServer(t *testing.T, id *identity, clients map[string]bool, ports map[
 		ErrorLog: slog.NewLogLogger(logger.Handler(), slog.LevelWarn)}
 	server.Protocols = new(http.Protocols)
 	server.Protocols.SetHTTP1(true)
-	go server.Serve(tls.NewListener(listener, id.serverTLS(clients)))
+	go server.Serve(tls.NewListener(listener, id.ServerTLS(clients)))
 	t.Cleanup(func() { server.Close() })
 	return listener.Addr().String()
 }

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
 type repeatable []string
@@ -28,7 +30,7 @@ func (r *repeatable) Set(value string) error {
 }
 
 func keyFlag(flags *flag.FlagSet) *string {
-	return flags.String("key", defaultKeyPath(), "Ed25519 identity file, created on first use")
+	return flags.String("key", identity.DefaultKeyPath(), "Ed25519 identity file, created on first use")
 }
 
 func validEndpoint(address string) error {
@@ -46,11 +48,11 @@ func runKey(args []string, out io.Writer) error {
 	if err := parseNoArgs(flags, args); err != nil {
 		return err
 	}
-	id, err := loadIdentity(*keyPath)
+	id, err := identity.Load(*keyPath)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%s\n\nPass this on the other machine as -client-key (if this is the workstation)\nor -server-key (if this is the VPN host).\n", id.fingerprint())
+	fmt.Fprintf(out, "%s\n\nPass this on the other machine as -client-key (if this is the workstation)\nor -server-key (if this is the VPN host).\n", id.Fingerprint())
 	return nil
 }
 
@@ -76,7 +78,7 @@ func runServe(logger *slog.Logger, args []string) error {
 	}
 	clients := make(map[string]bool)
 	for _, value := range clientKeys {
-		key, err := parseFingerprint(value)
+		key, err := identity.ParseFingerprint(value)
 		if err != nil {
 			return fmt.Errorf("-client-key: %w", err)
 		}
@@ -86,7 +88,7 @@ func runServe(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	id, err := loadIdentity(*keyPath)
+	id, err := identity.Load(*keyPath)
 	if err != nil {
 		return err
 	}
@@ -105,11 +107,11 @@ func runServe(logger *slog.Logger, args []string) error {
 	}
 	server.Protocols = new(http.Protocols)
 	server.Protocols.SetHTTP1(true)
-	logger.Info("serving", "address", listener.Addr(), "identity", id.fingerprint(), "ports", *portsFlag, "local_prefixes", handler.local)
+	logger.Info("serving", "address", listener.Addr(), "identity", id.Fingerprint(), "ports", *portsFlag, "local_prefixes", handler.local)
 	for key := range clients {
 		logger.Info("allowed client", "identity", key)
 	}
-	return server.Serve(tls.NewListener(listener, id.serverTLS(clients)))
+	return server.Serve(tls.NewListener(listener, id.ServerTLS(clients)))
 }
 
 func runBridge(logger *slog.Logger, args []string) error {
@@ -127,7 +129,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err := validEndpoint(*server); err != nil {
 		return fmt.Errorf("-server %w", err)
 	}
-	key, err := parseFingerprint(*serverKey)
+	key, err := identity.ParseFingerprint(*serverKey)
 	if err != nil {
 		return fmt.Errorf("-server-key: %w", err)
 	}
@@ -147,7 +149,7 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return fmt.Errorf("-blocklist: %w", err)
 	}
-	id, err := loadIdentity(*keyPath)
+	id, err := identity.Load(*keyPath)
 	if err != nil {
 		return err
 	}
@@ -159,9 +161,9 @@ func runBridge(logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
-	b := &bridge{server: *server, tlsConfig: id.clientTLS(key), blocklist: blocklist,
+	b := &bridge{server: *server, tlsConfig: id.ClientTLS(key), blocklist: blocklist,
 		proxyDomains: proxyDomains, direct: direct, logger: logger}
-	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.fingerprint(), "server", *server, "blocklist_rules", len(blocklist), "local_prefixes", direct.local)
+	logger.Info("bridge listening", "address", listener.Addr(), "identity", id.Fingerprint(), "server", *server, "blocklist_rules", len(blocklist), "local_prefixes", direct.local)
 	go b.probe()
 	return b.serve(listener)
 }

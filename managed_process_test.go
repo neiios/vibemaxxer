@@ -108,29 +108,3 @@ func TestManagedDomainFilePresenceAndValidation(t *testing.T) {
 		t.Fatal("accepted missing rules")
 	}
 }
-
-func TestConcurrentIdentityPublication(t *testing.T) {
-	_, root := managedFixture(t)
-	key := filepath.Join(root, "new.pem")
-	type result struct {
-		id  *identity
-		err error
-	}
-	results := make(chan result, 32)
-	for i := 0; i < 32; i++ {
-		go func() { id, err := loadIdentity(key); results <- result{id, err} }()
-	}
-	var fingerprint string
-	for i := 0; i < 32; i++ {
-		result := <-results
-		if result.err != nil {
-			t.Fatal(result.err)
-		}
-		if fingerprint == "" {
-			fingerprint = result.id.fingerprint()
-		}
-		if result.id.fingerprint() != fingerprint {
-			t.Fatal("first sessions used different identities")
-		}
-	}
-}

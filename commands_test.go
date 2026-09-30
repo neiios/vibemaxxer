@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/neiios/vibemaxxer/internal/identity"
 )
 
 func TestFlagValidation(t *testing.T) {
@@ -75,7 +77,7 @@ func TestKeyCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	line, _, _ := strings.Cut(first.String(), "\n")
-	if _, err := parseFingerprint(line); err != nil || first.String() != second.String() {
+	if _, err := identity.ParseFingerprint(line); err != nil || first.String() != second.String() {
 		t.Fatalf("key output:\n%s\n%s", first.String(), second.String())
 	}
 }
