@@ -20,9 +20,6 @@ import (
 	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
-// The test binary doubles as the vibemaxxer executable (via Main) and as the
-// command that `run` supervises (via child), so these tests drive the real
-// process tree: run → bridge → serve.
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -40,9 +37,6 @@ func TestMain(m *testing.M) {
 func child(args []string) int {
 	switch args[0] {
 	case "connect":
-		// Check the environment `run` hands to agents, issue one CONNECT
-		// through it and report the answer. Exit 7 so tests can verify that
-		// exit statuses propagate.
 		entries, _ := os.ReadDir("/proc/self/fd")
 		for _, e := range entries {
 			target, _ := os.Readlink("/proc/self/fd/" + e.Name())
@@ -117,8 +111,6 @@ func snapshot(t *testing.T, root, server, serverKey string) managed.Config {
 	return c
 }
 
-// managedFixture points the bridge at a dead server; use it for tests about
-// supervision rather than the data path.
 func managedFixture(t *testing.T) (managed.Config, string) {
 	t.Helper()
 	root := runtimeRoot(t)
@@ -165,7 +157,6 @@ func waitFile(t *testing.T, path string) []byte {
 	return nil
 }
 
-// fingerprint runs `vibemaxxer key`, creating the identity on first use.
 func fingerprint(t *testing.T, keyPath string) string {
 	t.Helper()
 	exe, _ := os.Executable()
@@ -181,8 +172,6 @@ func fingerprint(t *testing.T, keyPath string) string {
 	return fp
 }
 
-// startCommand runs a vibemaxxer subcommand in the background until the test
-// ends and returns once its log contains ready.
 func startCommand(t *testing.T, ready string, args ...string) *proxytest.LogBuffer {
 	t.Helper()
 	exe, _ := os.Executable()
@@ -220,10 +209,6 @@ func startBridge(t *testing.T, keyPath, server, serverKey string) (address strin
 	return address, logs
 }
 
-// assertConnected checks the supervised command's view of the chain: proxy
-// variables set, no leaked descriptors, exit status propagated, and a CONNECT
-// that travelled bridge → TLS → serve and was refused there because the
-// destination is loopback (serve never allows private destinations).
 func assertConnected(t *testing.T, output []byte, err error, serveLogs *proxytest.LogBuffer) {
 	t.Helper()
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 7 {
@@ -235,8 +220,6 @@ func assertConnected(t *testing.T, output []byte, err error, serveLogs *proxytes
 	proxytest.WaitForLog(t, serveLogs, "private/local destination blocked")
 }
 
-// External mode: key on both sides, serve, a self-managed bridge, then
-// `run -bridge` execs the command against it.
 func TestExternalBridgeEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	clientKey := filepath.Join(dir, "client.pem")
@@ -251,8 +234,6 @@ func TestExternalBridgeEndToEnd(t *testing.T) {
 	proxytest.WaitForLog(t, bridgeLogs, "upstream verified")
 }
 
-// Managed mode: `run -server` starts a shared bridge on demand, supervises the
-// command, and stops the bridge after the grace period.
 func TestManagedEndToEnd(t *testing.T) {
 	root := runtimeRoot(t)
 	clientKey := filepath.Join(root, "identity.pem")

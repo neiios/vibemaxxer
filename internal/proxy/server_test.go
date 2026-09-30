@@ -128,9 +128,6 @@ func TestTunnelUpstreamHalfClose(t *testing.T) {
 	}
 }
 
-// Destination policy is the server's main safety property: a compromised or
-// careless workstation must not reach the VPN host's LAN, loopback, or link-local
-// networks through the tunnel.
 func TestDestinationPolicy(t *testing.T) {
 	s := &Server{local: []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("203.0.113.0/24")}}
 	for addr, want := range map[string]bool{

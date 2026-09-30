@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// The first `run` on a machine may race with other first runs (several agents
-// started at once); all of them must end up with the same private, persistent key.
 func TestIdentityFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "identity.pem")
 	type result struct {

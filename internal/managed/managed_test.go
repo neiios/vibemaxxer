@@ -231,8 +231,6 @@ func TestManagedConfigSnapshots(t *testing.T) {
 	if !strings.Contains(string(data), "destination blocked") || !strings.Contains(string(data), "no direct fallback") {
 		t.Fatalf("missing diagnostics: %s", data)
 	}
-	// An empty -proxy-domains file means "connect everything directly"; no file
-	// means "proxy everything". They must never share a bridge.
 	empty := filepath.Join(root, "empty")
 	os.WriteFile(empty, nil, 0600)
 	withEmpty, err := Snapshot(c.Server, c.ServerKey, c.Listen, filepath.Join(root, "identity.pem"), "", empty, "443", c.Grace)

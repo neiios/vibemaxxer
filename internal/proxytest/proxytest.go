@@ -1,4 +1,3 @@
-// Package proxytest holds fixtures shared by tests that talk to a CONNECT proxy.
 package proxytest
 
 import (

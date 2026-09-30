@@ -11,8 +11,6 @@ import (
 	"github.com/neiios/vibemaxxer/internal/proxytest"
 )
 
-// Each case encodes a deliberate policy, not just a missing flag: no wildcard
-// or LAN listeners, no mixing external and managed mode, bounded grace.
 func TestFlagPolicy(t *testing.T) {
 	logger, _ := proxytest.Logger()
 	key := filepath.Join(t.TempDir(), "id.pem")
@@ -51,7 +49,6 @@ func TestKeyCommand(t *testing.T) {
 		t.Fatalf("key output changed:\n%s\n%s", first.String(), second.String())
 	}
 	line, _, _ := strings.Cut(first.String(), "\n")
-	// Fingerprints are pasted between machines; accept case and whitespace noise.
 	if got, err := identity.ParseFingerprint("  " + strings.ToUpper(line) + "\n"); err != nil || got != line {
 		t.Fatalf("fingerprint %q: %q, %v", line, got, err)
 	}

@@ -24,8 +24,6 @@ func TestLoad(t *testing.T) {
 	if len(list) != 3 || !list["example.com"] || !list["telemetry.vendor.com"] || !list["xn--bcher-kva.example"] {
 		t.Fatalf("list %v", list)
 	}
-	// No file means "no rules" (nil); an empty file means "empty rules". The
-	// bridge treats these differently: nil proxies everything, empty proxies nothing.
 	if list, err := Load(""); err != nil || list != nil {
 		t.Fatalf("empty path: %v, %v", list, err)
 	}

@@ -1,4 +1,3 @@
-// Package cli parses subcommands and flags and wires the other packages together.
 package cli
 
 import (
