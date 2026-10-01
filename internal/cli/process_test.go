@@ -94,9 +94,8 @@ func runtimeRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(tmp) })
-	t.Setenv("XDG_RUNTIME_DIR", tmp)
-	root, err := managed.RuntimeDir()
-	if err != nil {
+	root := filepath.Join(tmp, "vibemaxxer")
+	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -108,6 +107,7 @@ func snapshot(t *testing.T, root, server, serverKey string) managed.Config {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.Root = root
 	return c
 }
 
@@ -118,9 +118,12 @@ func managedFixture(t *testing.T) (managed.Config, string) {
 	return snapshot(t, root, server, strings.Repeat("ab", 32)), root
 }
 
-func managedRunArgs(c managed.Config, root string, child ...string) []string {
-	args := []string{"_test-run", "run", "-server", c.Server, "-server-key", c.ServerKey, "-key", filepath.Join(root, "identity.pem"), "-grace", c.Grace.String(), "--"}
-	return append(args, child...)
+func managedCommand(c managed.Config, root string, child ...string) *exec.Cmd {
+	exe, _ := os.Executable()
+	args := []string{"_test-run", "run", "-server", c.Server, "-server-key", c.ServerKey, "-key", filepath.Join(root, "identity.pem"), "-grace", c.Grace.String(), "--", exe, "_test-child"}
+	cmd := exec.Command(exe, append(args, child...)...)
+	cmd.Env = append(os.Environ(), "XDG_RUNTIME_DIR="+filepath.Dir(root))
+	return cmd
 }
 
 func waitStopped(t *testing.T, c managed.Config, root string) {
@@ -221,6 +224,7 @@ func assertConnected(t *testing.T, output []byte, err error, serveLogs *proxytes
 }
 
 func TestExternalBridgeEndToEnd(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	clientKey := filepath.Join(dir, "client.pem")
 	server, serverKey, serveLogs := startServe(t, filepath.Join(dir, "server.pem"), fingerprint(t, clientKey))
@@ -235,12 +239,12 @@ func TestExternalBridgeEndToEnd(t *testing.T) {
 }
 
 func TestManagedEndToEnd(t *testing.T) {
+	t.Parallel()
 	root := runtimeRoot(t)
 	clientKey := filepath.Join(root, "identity.pem")
 	server, serverKey, serveLogs := startServe(t, filepath.Join(root, "server.pem"), fingerprint(t, clientKey))
 	c := snapshot(t, root, server, serverKey)
-	exe, _ := os.Executable()
-	output, err := exec.Command(exe, managedRunArgs(c, root, exe, "_test-child", "connect", "127.0.0.1:443")...).CombinedOutput()
+	output, err := managedCommand(c, root, "connect", "127.0.0.1:443").CombinedOutput()
 	assertConnected(t, output, err, serveLogs)
 	if !strings.Contains(string(output), "log:") {
 		t.Fatalf("log path not printed:\n%s", output)
@@ -255,12 +259,12 @@ func TestManagedEndToEnd(t *testing.T) {
 }
 
 func TestManagedSupervisorSignalAndDeath(t *testing.T) {
+	t.Parallel()
 	for _, kill := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
 		t.Run(kill.String(), func(t *testing.T) {
 			c, root := managedFixture(t)
-			exe, _ := os.Executable()
 			ready := filepath.Join(root, "ready")
-			cmd := exec.Command(exe, managedRunArgs(c, root, exe, "_test-child", "wait", ready)...)
+			cmd := managedCommand(c, root, "wait", ready)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -280,13 +284,13 @@ func TestManagedSupervisorSignalAndDeath(t *testing.T) {
 }
 
 func TestManagedIndependentLaunchers(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
-	exe, _ := os.Executable()
 	cmds := make([]*exec.Cmd, 2)
 	ready := make([]string, 2)
 	for i := range cmds {
 		ready[i] = filepath.Join(root, []string{"first", "second"}[i])
-		cmds[i] = exec.Command(exe, managedRunArgs(c, root, exe, "_test-child", "wait", ready[i])...)
+		cmds[i] = managedCommand(c, root, "wait", ready[i])
 		cmds[i].SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmds[i].Start(); err != nil {
 			t.Fatal(err)
@@ -311,6 +315,7 @@ func TestManagedIndependentLaunchers(t *testing.T) {
 }
 
 func TestManagedInteractiveTerminal(t *testing.T) {
+	t.Parallel()
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
 		t.Skipf("PTY unavailable: %v", err)
@@ -331,9 +336,8 @@ func TestManagedInteractiveTerminal(t *testing.T) {
 	}
 	defer slave.Close()
 	c, root := managedFixture(t)
-	exe, _ := os.Executable()
 	ready := filepath.Join(root, "tty-ready")
-	cmd := exec.Command(exe, managedRunArgs(c, root, exe, "_test-child", "tty", ready)...)
+	cmd := managedCommand(c, root, "tty", ready)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {

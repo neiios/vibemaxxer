@@ -11,7 +11,7 @@
     {
       packages = forAllSystems (pkgs: rec {
         default = vibemaxxer;
-        vibemaxxer = pkgs.callPackage ./nix/package.nix { src = self; };
+        vibemaxxer = pkgs.callPackage ./nix/package.nix { src = ./.; };
       });
 
       checks = forAllSystems (

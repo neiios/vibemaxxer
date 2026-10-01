@@ -12,6 +12,7 @@ import (
 )
 
 func TestFlagPolicy(t *testing.T) {
+	t.Parallel()
 	logger, _ := proxytest.Logger()
 	key := filepath.Join(t.TempDir(), "id.pem")
 	fp := strings.Repeat("ab", 32)
@@ -37,6 +38,7 @@ func TestFlagPolicy(t *testing.T) {
 }
 
 func TestKeyCommand(t *testing.T) {
+	t.Parallel()
 	key := filepath.Join(t.TempDir(), "id.pem")
 	var first, second bytes.Buffer
 	if err := runKey([]string{"-key", key}, &first); err != nil {
@@ -60,6 +62,7 @@ func TestKeyCommand(t *testing.T) {
 }
 
 func TestProxyEnv(t *testing.T) {
+	t.Parallel()
 	env := proxyEnv([]string{"PATH=/bin", "https_proxy=http://old:1", "ALL_PROXY=socks://x",
 		"NO_PROXY=internal.example,localhost", "no_proxy=internal.example, 127.0.0.1", "TERM=xterm"}, "127.0.0.1:8888")
 	want := []string{

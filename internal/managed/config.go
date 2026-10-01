@@ -17,13 +17,13 @@ import (
 )
 
 type Config struct {
-	Server, ServerKey, Listen     string
-	Key                           []byte
-	Block, Domains                domain.Rules
-	BlockContents, DomainContents []byte
-	Ports                         map[int]bool
-	Grace                         time.Duration
-	Executable                    string
+	Server, ServerKey, Listen, Root string
+	Key                             []byte
+	Block, Domains                  domain.Rules
+	BlockContents, DomainContents   []byte
+	Ports                           map[int]bool
+	Grace                           time.Duration
+	Executable                      string
 }
 
 func (c Config) Digest() string {
@@ -72,7 +72,8 @@ func Snapshot(server, pin, listen, keyPath, blockPath, domainPath, ports string,
 		return c, err
 	}
 	c.Executable = hex.EncodeToString(h.Sum(nil))
-	return c, nil
+	c.Root, err = RuntimeDir()
+	return c, err
 }
 
 func snapshotRules(path string) (domain.Rules, []byte, error) {

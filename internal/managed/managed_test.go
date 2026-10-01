@@ -32,9 +32,8 @@ func runtimeRoot(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(tmp) })
-	t.Setenv("XDG_RUNTIME_DIR", tmp)
-	root, err := RuntimeDir()
-	if err != nil {
+	root := filepath.Join(tmp, "vibemaxxer")
+	if err := os.Mkdir(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -49,13 +48,15 @@ func managedFixture(t *testing.T) (Config, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.Root = root
 	return c, root
 }
 func mustLease(t *testing.T, c Config) *Lease {
 	t.Helper()
 	lease, err := Acquire(c, 3*time.Second)
 	if err != nil {
-		t.Fatal(err)
+		logs, _ := os.ReadFile(filepath.Join(c.Root, c.Digest()) + ".log")
+		t.Fatalf("%v\ndaemon log:\n%s", err, logs)
 	}
 	t.Cleanup(func() { lease.Close() })
 	return lease
@@ -98,6 +99,7 @@ func leasePID(t *testing.T, l *Lease) int {
 }
 
 func TestManagedConcurrentLifecycle(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	const n = 24
 	leases := make([]*Lease, n)
@@ -157,6 +159,7 @@ func TestManagedConcurrentLifecycle(t *testing.T) {
 }
 
 func TestManagedShutdownRegistrationRace(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	c.Grace = 100 * time.Millisecond
 	for i := 0; i < 12; i++ {
@@ -176,6 +179,7 @@ func TestManagedShutdownRegistrationRace(t *testing.T) {
 }
 
 func TestManagedCrashRecovery(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	l := mustLease(t, c)
 	pid := leasePID(t, l)
@@ -199,6 +203,7 @@ func TestManagedCrashRecovery(t *testing.T) {
 }
 
 func TestManagedConfigSnapshots(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	block, domains := filepath.Join(root, "block"), filepath.Join(root, "domains")
 	os.WriteFile(block, []byte("blocked.example\n"), 0600)
@@ -208,6 +213,7 @@ func TestManagedConfigSnapshots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		x.Root = root
 		return x
 	}
 	first := snapshot()
@@ -257,6 +263,7 @@ func TestManagedConfigSnapshots(t *testing.T) {
 }
 
 func TestManagedPrivateState(t *testing.T) {
+	t.Parallel()
 	_, root := managedFixture(t)
 	target := filepath.Join(root, "target")
 	os.WriteFile(target, []byte("do not touch"), 0600)
@@ -287,6 +294,7 @@ func TestManagedPrivateState(t *testing.T) {
 }
 
 func TestManagedStartupBounded(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	gate, err := privateFile(filepath.Join(root, c.Digest()) + ".lock")
 	if err != nil {
@@ -322,6 +330,7 @@ func TestManagedStartupBounded(t *testing.T) {
 }
 
 func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	socket := filepath.Join(root, c.Digest()) + ".sock"
 	os.WriteFile(socket, []byte("not a socket"), 0600)
@@ -346,6 +355,7 @@ func TestManagedRejectUnsafeSocketAndStaleRecovery(t *testing.T) {
 }
 
 func TestManagedDoesNotAdoptExistingTCPListener(t *testing.T) {
+	t.Parallel()
 	c, root := managedFixture(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

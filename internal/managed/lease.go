@@ -54,15 +54,23 @@ func connectLease(socket, logPath string, deadline time.Time) (*Lease, error) {
 	return &Lease{Conn: conn, Address: address, Log: logPath}, nil
 }
 
+func transient(err error) bool {
+	for _, candidate := range []error{os.ErrNotExist, syscall.ECONNREFUSED, syscall.ECONNRESET, io.EOF, io.ErrUnexpectedEOF} {
+		if errors.Is(err, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func Acquire(c Config, timeout time.Duration) (*Lease, error) {
 	if timeout < 100*time.Millisecond || timeout > time.Minute {
 		return nil, errors.New("-startup-timeout must be between 100ms and 1m")
 	}
-	root, err := RuntimeDir()
-	if err != nil {
-		return nil, err
+	if c.Root == "" {
+		return nil, errors.New("managed config has no runtime directory")
 	}
-	base := filepath.Join(root, c.Digest())
+	base := filepath.Join(c.Root, c.Digest())
 	deadline := time.Now().Add(timeout)
 	gate, err := privateFile(base + ".lock")
 	if err != nil {
@@ -77,7 +85,7 @@ func Acquire(c Config, timeout time.Duration) (*Lease, error) {
 	for time.Now().Before(deadline) {
 		if lease, err := connectLease(base+".sock", base+".log", deadline); err == nil {
 			return lease, nil
-		} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ECONNREFUSED) {
+		} else if !transient(err) {
 			return nil, err
 		}
 		owner, err := privateFile(base + ".owner")
