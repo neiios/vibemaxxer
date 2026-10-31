@@ -10,7 +10,7 @@
 }:
 (buildGo127Module.override { stdenv = stdenvNoCC; }) {
   pname = "vibemaxxer";
-  version = "0.3.0";
+  version = "1.0.0";
   src = lib.fileset.toSource {
     root = src;
     fileset = lib.fileset.unions [
@@ -24,7 +24,6 @@
     "-s"
     "-w"
   ];
-  doCheck = true;
   checkPhase = ''
     runHook preCheck
     go test -p "$NIX_BUILD_CORES" ./...

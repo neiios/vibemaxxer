@@ -1,177 +1,220 @@
 # vibemaxxer
 
-Route coding-agent traffic (Claude Code, Codex, pi, OpenCode, Cursor CLI) through a VPN on another Linux machine. One static Go binary, standard library only.
+Domain-routed HTTP proxy for sending selected traffic out of a remote machine (for example, a private AWS VM) while everything else exits from home. One static Go binary, standard library only, two modes:
 
 ```text
-agent → bridge (127.0.0.1) → TLS 1.3 over LAN → serve (VPN host) → VPN → API
+app ─▶ vibemaxxer client ──DIRECT──▶ internet (exits from home)
+       127.0.0.1:8080    ──BLOCK───▶ 403
+                         ──PROXY───▶ ssh -L 127.0.0.1:18080 ═▶ frp XTCP (direct UDP) ═▶ sshd
+                                                                    vibemaxxer server 127.0.0.1:8081 ─▶ internet (exits from VM)
 ```
 
-Each machine has an Ed25519 identity. The server admits listed workstation fingerprints; the bridge pins the server's. The agent's own HTTPS is tunneled unchanged, so the LAN sees traffic volume and timing, nothing else.
+vibemaxxer does one job: decide per hostname, and forward HTTP. The rest is done by tools that already do it well:
 
-vibemaxxer does not set up or enforce the VPN. Configure routing, DNS, and a kill switch on the host.
-
-## Setup
-
-On both machines:
-
-```sh
-vibemaxxer key
-```
-
-Prints the machine's fingerprint and creates `~/.config/vibemaxxer/identity.pem` on first run. Swap the two fingerprints by any channel. They are public.
-
-VPN host:
-
-```sh
-vibemaxxer serve -listen 192.168.1.50:8443 -client-key WORKSTATION_FP
-```
-
-Bind the LAN address, not `0.0.0.0`, so the listener stays off the tunnel interface. Repeat `-client-key` per workstation. Remove one and restart to revoke it. If a workstation connects before its key is listed, the server logs the fingerprint with the exact flag to add.
-
-Workstation (on-demand shared bridge, no persistent service):
-
-```sh
-vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP -- claude
-# In another terminal, the same settings reuse the same bridge:
-vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP -- codex
-```
-
-The first session starts a detached bridge on a free loopback port. Each `run` prints its address and private log path. The bridge stops three seconds after the last session exits. `run` supervises the command and sets `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lowercase forms. Commands keep their terminal and exit status.
-
-Alternatively, manage the bridge yourself (existing behavior, unchanged):
-
-```sh
-vibemaxxer bridge -server 192.168.1.50:8443 -server-key HOST_FP
-vibemaxxer run -bridge 127.0.0.1:8888 -- claude
-```
-
-The external bridge defaults to `127.0.0.1:8888`; external `run` checks its TCP listener then execs the command. Omitting both `-server` and `-bridge` retains this mode. Both bridge modes check the upstream and log pin, identity or reachability failures. The check runs in the background; the listener is available immediately. Readiness means the local listener is available, not that the VPN host accepted the identity: upstream failures are logged and retried per connection, never silently routed directly.
-
-Check the exit IP:
-
-```sh
-vibemaxxer run -- curl https://api.ipify.org
-```
-
-### Managed configuration
-
-```sh
-vibemaxxer run -server 192.168.1.50:8443 -server-key HOST_FP \
-  -blocklist blocked-domains.txt -proxy-domains proxy-domains.txt \
-  -direct-ports 443,8443 -- pi
-```
-
-Managed `run` also accepts `-key`, `-listen` (default `127.0.0.1:0`, a free port), `-grace` (default `3s`), `-startup-timeout` (default `15s`). Grace and startup timeout must be between `100ms` and `1m`. Managed flags require `-server` and `-server-key`; they cannot be combined with `-bridge`. Use the same flags across sessions to share. An explicit occupied port fails startup; an existing listener is never adopted.
-
-### Blocklist
-
-```sh
-vibemaxxer bridge -server ... -server-key ... -blocklist blocked-domains.txt
-```
-
-One domain per line, `#` comments allowed. A rule covers its subdomains. Write `example.com`, not `.example.com`; rules with empty labels or IP literals are rejected at startup because they could never match. Blocked CONNECTs get `403` from the bridge without contacting the server. IP literals are not matched. The file is read at startup.
-
-### Selective routing
-
-```sh
-vibemaxxer bridge -server ... -server-key ... -proxy-domains proxy-domains.txt
-```
-
-The file uses the same format as the blocklist (one ASCII/punycode domain per line, including subdomains, case-insensitive, `#` comments). Matching CONNECT destinations go through the server; everything else connects directly from the workstation through the local bridge. IP literals use the direct route. DNS resolution happens on the server for server routes and locally for direct routes.
-
-Omitting `-proxy-domains` preserves proxy-all behavior. An empty file routes everything directly; invalid or unreadable files fail startup. Files are read at startup. The blocklist takes precedence over both routes. Server failures never cause matching domains to fall back to direct connections.
-
-Direct routes allow only port 443 by default; use `-direct-ports 443,8443` to change this. They retain the private/local destination protections, timeouts, and shared bridge connection limit. The server's `-ports` setting independently controls server routes. Logs identify `route=direct` or `route=server`.
-
-Applications still use the local bridge for both routes; this does not add support for plain HTTP requests (only CONNECT is supported). Existing `NO_PROXY` entries are preserved by `run` and can bypass the bridge and its routing/blocklist rules. With selective routing, stopping the server should break matching destinations while direct destinations remain available.
-
-## Reference
-
-| Command | Purpose |
+| Concern | Tool |
 | --- | --- |
-| `key` | Print this machine's fingerprint |
-| `serve` | CONNECT server on the VPN host |
-| `bridge` | Loopback proxy on the workstation |
-| `run` | Run a command with proxy variables; optionally manage a shared bridge |
+| NAT traversal, rendezvous, no relay | [frp](https://gofrp.org) XTCP (`frps` on a public host, `frpc` on both ends) |
+| Encryption, peer authentication, key management | OpenSSH local forward to a restricted account |
+| Routing by domain, destination policy, egress | vibemaxxer `client` (home) and `server` (VM) |
+| Process supervision | systemd or your service manager |
 
-| Flag | Command | Default | Meaning |
-| --- | --- | --- | --- |
-| `-key` | key, serve, bridge, run (managed) | `~/.config/vibemaxxer/identity.pem` | Identity file |
-| `-listen` | serve | required | LAN `IP:PORT`; wildcards are refused |
-| `-client-key` | serve | required | Allowed workstation fingerprint, repeatable |
-| `-ports` | serve | `443` | Allowed destination ports |
-| `-server` | bridge | required | VPN host `HOST:PORT` |
-| `-server-key` | bridge | required | VPN host fingerprint |
-| `-listen` | bridge | `127.0.0.1:8888` | Loopback `IP:PORT` |
-| `-blocklist` | bridge | none | Domain blocklist file |
-| `-proxy-domains` | bridge | none (proxy all) | Route only these domains through the server |
-| `-direct-ports` | bridge | `443` | Allowed destination ports for direct routes |
-| `-bridge` | run (external) | `127.0.0.1:8888` | Existing bridge address; exec mode |
-| `-server`, `-server-key` | run (managed) | required | Enable on-demand mode; same meaning as bridge |
-| `-blocklist`, `-proxy-domains`, `-direct-ports` | run (managed) | as above | Snapshot routing configuration |
-| `-listen` | run (managed) | `127.0.0.1:0` | Loopback listener, automatic free port |
-| `-grace` | run (managed) | `3s` | Idle shutdown delay |
-| `-startup-timeout` | run (managed) | `15s` | Bounded lock/readiness wait |
+Both modes are standard HTTP/1.1 forward proxies: `CONNECT host:port` for HTTPS and absolute-form requests for plain HTTP. TLS stays end to end; nothing is intercepted. Proxied names are never resolved at home; the server resolves them, so names that only exist on the VM work.
 
-Fixed: 10-second dial and header timeouts, 256 tunnels per process. Private, loopback, link-local, CGNAT, and any prefix configured on the host's own interfaces at startup are refused after DNS resolution. Other global IPv6 destinations are indistinguishable from the internet; if the LAN uses global addresses beyond the host's own prefixes, block them with host firewall rules. The bridge waits at most 20 seconds for the host's CONNECT reply.
+## Rules
 
-## Clients
+Each mode reads its own rules file. One rule per line, `#` starts a comment.
 
-- **Claude Code**: `vibemaxxer run -- claude`. With `claude setup-token`, export `CLAUDE_CODE_OAUTH_TOKEN` in the same shell. A fresh install may show the login picker despite a valid token; set `hasCompletedOnboarding` to `true` in `~/.claude.json`.
-- **Codex**: 0.154.0 or later. Earlier WebSocket clients ignore proxy variables.
-- **pi**: provider-specific settings can bypass the proxy.
-- **OpenCode**: the managed service needs `opencode service set env` for `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and their lowercase forms, then `opencode service start`.
-- **Cursor CLI**: `vibemaxxer run -- agent`.
+```text
+# client.rules (home)
+block .ads.example          # never connect
+proxy .anthropic.com        # send through the server
+proxy api.openai.com
+# everything else: DIRECT
+```
 
-To confirm a client is proxied, make a model request and watch for `tunnel opened` in the server log. Stop the bridge and the same request must fail.
+```text
+# server.rules (VM)
+allow .anthropic.com        # ports default to 443
+allow api.openai.com 443
+allow .internal.example 80,443
+deny  admin.internal.example
+# everything else: denied
+```
 
-## Managed bridge architecture and limits
+- `example.com` matches only that name. `.example.com` matches `example.com` and every subdomain, not `badexample.com`. `*` matches any hostname.
+- `block`/`deny` always wins, regardless of order or specificity. Otherwise the first matching `proxy`/`allow` applies. Unmatched requests go DIRECT on the client and are denied on the server.
+- `allow` checks the destination port as well. `proxy` rules ignore the port; the server decides.
+- Names are matched case-insensitively, without a trailing dot. Only ASCII names are accepted; write international names in punycode (`xn--…`).
+- IP-literal destinations are refused in both modes. Applications must use hostnames.
+- Files are validated at startup; any error stops the process. Restart to apply changes. Existing tunnels keep running until they close.
 
-- A configuration hash includes the server address/pin, actual identity key, listen address, direct ports, grace, **domain file bytes**, and executable contents. File paths alone are not keys. Absent and empty selective-routing files differ. Identical contents at different paths can share. Binary upgrades, identity replacement or rule edits create separate bridges; existing sessions retain their original snapshots. Edits are not hot-reloaded. Fixed listen ports cannot host two configurations simultaneously.
-- Per-configuration Linux `flock` locks serialize startup and protect shutdown versus lease registration. A separate inherited lifetime lock reserves ownership even before readiness; stale sockets are recovered only by its owner. No PID counters or PID-based cleanup. Lock files are deliberately never unlinked, avoiding split-lock races.
-- Every supervisor holds a live control Unix connection for the command's lifetime. Registration occurs under the same gate used by idle shutdown. EOF releases the lease. New leases during grace keep the bridge alive. Control descriptors are close-on-exec and are not passed to commands or their descendants.
-- The daemon starts a new session with `/dev/null` stdin and private log stdout/stderr, independent of the first supervisor's terminal, pipes or lifetime. It runs from `/` but stays in the first launcher's cgroup, so stopping a systemd unit that started that first session also stops the bridge. An unlinked private configuration snapshot is passed by descriptor. Runtime state lives in `$XDG_RUNTIME_DIR/vibemaxxer`, or `/tmp/vibemaxxer-UID` when unset. Control sockets and log/lock files are owner-validated and mode `0600`; control peers are UID-checked. Symlinks, hardlinked state files and unsafe existing files are refused. Same-UID processes are trusted.
-- Logs persist after shutdown, including block rule diagnostics and upstream failures. They are not rotated automatically. Inspect the printed `.log` path; remove old logs yourself. Do not delete runtime state or its lock files while sessions/launchers are active. There is no always-running manager or persistent service.
-- Startup lock/readiness waits are bounded. Local file reads and executable hashing precede that wait. A launcher that times out may leave an already-starting daemon, which exits after its idle grace. A bridge crash is reported to live supervisors; it is **not** transparently restarted for existing commands. VPN requests fail rather than fall back directly. A later new session can recover stale state and start a new bridge.
-- If a supervisor is killed (including SIGKILL), its lease closes even if its command survives. Commands that daemonize or leave background children do not extend the lease: tracking is by direct supervised session, not descendant process trees. Those children may lose proxy access after grace. Similarly, stopping a supervisor with job control retains its lease until it resumes/exits. No automatic child-tree cleanup is attempted.
-- Commands share the supervisor's foreground process group and inherit real terminal descriptors (no PTY emulation). Terminal input, resizing and shell job control remain available. INT/QUIT/TERM/HUP delivered to the supervisor are forwarded to its immediate command; terminal group INT/QUIT can also reach the command directly, so custom signal handlers should tolerate duplicate delivery. Exit codes are preserved; signal exits use `128 + signal`. Background descendants are not independently supervised. On bridge loss, the command remains running with a warning so users can save work.
+The two policies are independent: the server never trusts the client's decision, and the client never falls back to DIRECT when the server or tunnel fails.
+
+## Commands
+
+```sh
+vibemaxxer client -rules client.rules [-listen 127.0.0.1:8080] [-upstream 127.0.0.1:18080] [-allow-private]
+vibemaxxer server -rules server.rules [-listen 127.0.0.1:8081] [-allow-private]
+```
+
+`-listen` and `-upstream` must be loopback addresses. `-upstream` is the local end of the SSH forward.
+
+Destinations are checked after DNS resolution, on the address actually dialed. Loopback, link-local (including `169.254.169.254`), multicast, `0.0.0.0/8` and the AWS IPv6 metadata range `fd00:ec2::/32` are always refused. Private, CGNAT and the host's own interface networks (read at startup) are refused unless `-allow-private` is set (for example, to reach private VPC services from the server).
+
+### Responses
+
+Refusals happen before a tunnel is established and carry an [RFC 9209](https://www.rfc-editor.org/rfc/rfc9209) `Proxy-Status` header naming the mode that refused:
+
+| Status | `Proxy-Status` error | Cause |
+| --- | --- | --- |
+| 400 | `http_request_error` | Malformed request, authority, port, or non-`http` absolute URL |
+| 403 | `http_request_denied` | Client `block`, server `deny`, or no server `allow` for host and port |
+| 403 | `destination_ip_prohibited` | IP literal, or name resolved to a refused address |
+| 502 | `dns_error`, `connection_refused`, `destination_unavailable` | Destination or upstream unreachable |
+| 503 | `connection_limit_reached` | 128 requests and tunnels already active |
+| 504 | `connection_timeout` | Destination (10 s) or upstream (30 s) timed out |
+
+Once a tunnel is up, failures close it; nothing is replayed. Fixed limits: 32 KiB request headers, 10 s header read, 15 minutes of tunnel inactivity.
+
+Each request logs one line with method, host, port, action, rule (`file:line` or `default`), status, duration and error. Paths, queries, headers and payloads are never logged.
+
+## Deployment
+
+The example uses a public coordinator `frp.example.net`, a VM running sshd, and a home machine. Pin your frp and OpenSSH versions and check the options against them.
+
+### Coordinator
+
+```toml
+# frps.toml
+bindPort = 7000
+auth.token = "COORDINATOR_TOKEN"
+```
+
+frps only does authentication and rendezvous. frp's STUN discovery needs a server that implements RFC 5780 (the default, `stun.easyvoip.com:3478`, does); set `natHoleStunServer` in both `frpc.toml` files to change it.
+
+### VM
+
+```toml
+# frpc.toml
+serverAddr = "frp.example.net"
+serverPort = 7000
+auth.token = "COORDINATOR_TOKEN"
+
+[[proxies]]
+name = "vm-ssh"
+type = "xtcp"
+secretKey = "XTCP_SECRET"
+localIP = "127.0.0.1"
+localPort = 22
+```
+
+Create a dedicated `proxy-tunnel` account, authorize the home key for it, and restrict it in `sshd_config` (check with `sshd -t` and `sshd -T -C user=proxy-tunnel` while keeping an admin session open):
+
+```sshconfig
+Match User proxy-tunnel
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:8081
+    AllowStreamLocalForwarding no
+    MaxSessions 0
+    PermitTTY no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+```
+
+`MaxSessions 0` forbids shells and subsystems; `PermitOpen` limits the account to the vibemaxxer server. Administrative accounts can change the policy, so keep them separate.
+
+Run `vibemaxxer server -rules /etc/vibemaxxer/server.rules` and `frpc` under systemd.
+
+### Home
+
+```toml
+# frpc.toml
+serverAddr = "frp.example.net"
+serverPort = 7000
+auth.token = "COORDINATOR_TOKEN"
+
+[[visitors]]
+name = "vm-ssh-visitor"
+type = "xtcp"
+serverName = "vm-ssh"
+secretKey = "XTCP_SECRET"
+bindAddr = "127.0.0.1"
+bindPort = 2222
+# No fallbackTo: if the direct path fails, PROXY fails.
+```
+
+Put the VM's real host key in `known_hosts` under the alias `vm-proxy` (from a channel you trust, never by accepting it over the loopback port), then:
+
+```sshconfig
+Host vm-proxy-tunnel
+    HostName 127.0.0.1
+    Port 2222
+    User proxy-tunnel
+    IdentityFile ~/.ssh/id_ed25519
+    IdentitiesOnly yes
+    HostKeyAlias vm-proxy
+    StrictHostKeyChecking yes
+    BatchMode yes
+    LocalForward 127.0.0.1:18080 127.0.0.1:8081
+    ExitOnForwardFailure yes
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+```
+
+Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working.
+
+Example user services:
+
+```sh
+systemd-run --user --unit=vibemaxxer-ssh --property=Restart=always --property=RestartSec=5 ssh -N vm-proxy-tunnel
+systemd-run --user --unit=vibemaxxer-client --property=Restart=on-failure \
+  vibemaxxer client -rules ~/.config/vibemaxxer/client.rules
+```
+
+### Applications
+
+Point applications at the client:
+
+```sh
+export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
+curl https://api.ipify.org     # exits from home or the VM depending on the rules
+```
+
+- **Claude Code**: honors the variables. With `claude setup-token`, export `CLAUDE_CODE_OAUTH_TOKEN`; a fresh install may still show the login picker, so set `hasCompletedOnboarding` to `true` in `~/.claude.json`.
+- **Codex**: 0.154.0 or later; earlier WebSocket clients ignore proxy variables.
+- **OpenCode**: its managed service needs the variables via `opencode service set env`.
+- **Cursor CLI**, **pi**: honor the variables; provider-specific settings can bypass them.
+
+`NO_PROXY` entries and subprocesses that ignore the variables bypass vibemaxxer entirely.
 
 ## Security
 
-- Any local process can use the bridge. The server's port and destination rules bound what a compromised one can reach through your VPN.
-- `identity.pem` is a credential. To replace one, delete it, run `key`, and update the other side's flag.
-- No TLS interception. The host sees destinations, not payloads. Logs contain destinations, peer addresses, fingerprints, and errors.
-- Agent subprocesses such as browsers, MCP servers, and shells are not covered.
+- Any local process can use the loopback listeners. The server's rules bound what a compromised one can reach through the VM.
+- SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads.
+- An `allow` rule authorizes a host and port, not every URL or service behind it.
 
-## Build
+## Build and test
 
 ```sh
-nix build .      # ./result/bin/vibemaxxer
+nix build .        # ./result/bin/vibemaxxer
 nix develop
+CGO_ENABLED=0 go build -trimpath -o vibemaxxer ./cmd/vibemaxxer   # Go 1.27+
 ```
-
-Or with Go 1.27 or newer:
-
-```sh
-CGO_ENABLED=0 go build -trimpath -o vibemaxxer ./cmd/vibemaxxer
-```
-
-Linux only.
-
-Background services:
-
-```sh
-systemd-run --user --unit=vibemaxxer-server --property=Restart=on-failure \
-  vibemaxxer serve -listen 192.168.1.50:8443 -client-key WORKSTATION_FP
-
-systemd-run --user --unit=vibemaxxer-bridge --property=Restart=on-failure \
-  vibemaxxer bridge -server 192.168.1.50:8443 -server-key HOST_FP
-```
-
-## Development
 
 ```sh
 gofmt -l .
 go vet ./...
-go test -race -count=1 -timeout=120s ./...
+go test -race -count=1 ./...
+nix flake check    # includes the end-to-end test below; needs KVM
 ```
+
+`nix/e2e.nix` boots three QEMU VMs (coordinator, home, VM) with public test addresses and no inbound access to home or the VM. It runs frps with an RFC 5780 STUN server, frpc XTCP without fallback, the restricted sshd account and both vibemaxxer modes. It checks:
+
+- DIRECT and PROXY egress addresses, and names that resolve only on the VM.
+- Client blocks and server denials, including port mismatches, rebinding to loopback and IP literals.
+- Log redaction.
+- Tunnel-account bypass attempts.
+- With peer UDP blocked, PROXY fails while DIRECT keeps working, then recovers when UDP returns.

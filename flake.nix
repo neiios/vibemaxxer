@@ -15,7 +15,11 @@
       });
 
       checks = forAllSystems (
-        pkgs: import ./nix/checks.nix { package = packageFor pkgs.stdenv.hostPlatform.system; }
+        pkgs:
+        import ./nix/checks.nix {
+          inherit pkgs;
+          package = packageFor pkgs.stdenv.hostPlatform.system;
+        }
       );
 
       devShells = forAllSystems (pkgs: {

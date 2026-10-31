@@ -9,38 +9,40 @@ import (
 	"time"
 )
 
-var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
-var errPrivateDestination = errors.New("private/local destination blocked")
+var errProhibited = errors.New("destination address prohibited")
 
-func publicDestination(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	return addr.IsGlobalUnicast() && !addr.IsPrivate() && !addr.IsLoopback() &&
-		!addr.IsLinkLocalUnicast() && !sharedAddressSpace.Contains(addr)
+var (
+	alwaysRefused = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("fd00:ec2::/32"),
+	}
+	sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+)
+
+type guard struct {
+	allowPrivate bool
+	local        []netip.Prefix
 }
 
-func localPrefixes() ([]netip.Prefix, error) {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return nil, err
-	}
-	var prefixes []netip.Prefix
-	for _, addr := range addrs {
-		prefix, err := netip.ParsePrefix(addr.String())
-		if err != nil {
-			return nil, err
-		}
-		prefixes = append(prefixes, prefix.Masked())
-	}
-	return prefixes, nil
-}
-
-func (s *Server) allowed(addr netip.Addr) bool {
+func (g guard) allowed(addr netip.Addr) bool {
 	addr = addr.Unmap().WithZone("")
-	if !publicDestination(addr) {
+	if !addr.IsGlobalUnicast() {
 		return false
 	}
-	for _, prefix := range s.local {
+	for _, prefix := range alwaysRefused {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	if g.allowPrivate {
+		return true
+	}
+	if addr.IsPrivate() || sharedAddressSpace.Contains(addr) {
+		return false
+	}
+	for _, prefix := range g.local {
 		if prefix.Contains(addr) {
 			return false
 		}
@@ -48,16 +50,29 @@ func (s *Server) allowed(addr netip.Addr) bool {
 	return true
 }
 
-func (s *Server) dial(ctx context.Context, target string) (net.Conn, error) {
-	dialer := net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
-	if !s.allowPrivate {
-		dialer.ControlContext = func(_ context.Context, _, address string, _ syscall.RawConn) error {
+func Dialer(allowPrivate bool) (DialFunc, error) {
+	g := guard{allowPrivate: allowPrivate}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr.String())
+		if err != nil {
+			return nil, err
+		}
+		g.local = append(g.local, prefix.Masked())
+	}
+	dialer := net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: 30 * time.Second,
+		ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
 			endpoint, err := netip.ParseAddrPort(address)
-			if err != nil || !s.allowed(endpoint.Addr()) {
-				return errPrivateDestination
+			if err != nil || !g.allowed(endpoint.Addr()) {
+				return errProhibited
 			}
 			return nil
-		}
+		},
 	}
-	return dialer.DialContext(ctx, "tcp", target)
+	return dialer.DialContext, nil
 }
