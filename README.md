@@ -84,13 +84,26 @@ The example uses a public coordinator `frp.example.net`, a VM running sshd, and 
 
 ### Coordinator
 
+frps only does authentication and rendezvous. frpc does not verify the server's certificate unless told to, and its login proof can be replayed, so give frps a fixed certificate and pin it on both agents:
+
+```sh
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+  -subj /CN=frp.example.net -addext subjectAltName=DNS:frp.example.net \
+  -addext extendedKeyUsage=serverAuth -keyout frps.key -out frps.crt
+```
+
 ```toml
 # frps.toml
 bindPort = 7000
 auth.token = "COORDINATOR_TOKEN"
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/frps.crt"
+transport.tls.keyFile = "/etc/frp/frps.key"
 ```
 
-frps only does authentication and rendezvous. frp's STUN discovery needs a server that implements RFC 5780 (the default, `stun.easyvoip.com:3478`, does); set `natHoleStunServer` in both `frpc.toml` files to change it.
+Copy `frps.crt` (not the key) to both agents. Open only `bindPort` in the coordinator's firewall: a token holder can register ordinary TCP proxies, and frps binds whatever ports they ask for. Without `CAP_NET_BIND_SERVICE` it cannot take privileged ports, and frps needs no loopback traffic (systemd `IPAddressDeny=localhost`), which keeps a compromised frps away from services that listen only on localhost.
+
+frp's STUN discovery needs a server that implements RFC 5780; Google's and Cloudflare's do not. `stun.nextcloud.com:3478` and frp's default, `stun.easyvoip.com:3478`, do. Set `natHoleStunServer` in both `frpc.toml` files, and check a server from each machine with `frpc nathole discover --nat_hole_stun_server HOST:PORT`.
 
 ### VM
 
@@ -99,6 +112,8 @@ frps only does authentication and rendezvous. frp's STUN discovery needs a serve
 serverAddr = "frp.example.net"
 serverPort = 7000
 auth.token = "COORDINATOR_TOKEN"
+transport.tls.trustedCaFile = "/etc/vibemaxxer/frps.crt"
+natHoleStunServer = "stun.nextcloud.com:3478"
 
 [[proxies]]
 name = "vm-ssh"
@@ -135,6 +150,8 @@ Run `vibemaxxer server -rules /etc/vibemaxxer/server.rules` and `frpc` under sys
 serverAddr = "frp.example.net"
 serverPort = 7000
 auth.token = "COORDINATOR_TOKEN"
+transport.tls.trustedCaFile = "/home/me/.config/vibemaxxer/frps.crt"
+natHoleStunServer = "stun.nextcloud.com:3478"
 
 [[visitors]]
 name = "vm-ssh-visitor"
@@ -164,7 +181,7 @@ Host vm-proxy-tunnel
     ServerAliveCountMax 3
 ```
 
-Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working.
+Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working. frpc honors `HTTP_PROXY`, so never start it from a shell where the proxy variables point at vibemaxxer.
 
 ### On demand
 
@@ -231,7 +248,7 @@ curl https://api.ipify.org     # exits from home or the VM depending on the rule
 ## Security
 
 - Any local process can use the loopback listeners. The server's rules bound what a compromised one can reach through the VM.
-- SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads.
+- SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads. A compromised or impersonated coordinator can break rendezvous, not read or redirect the tunnel; pinning its certificate also keeps the frp token from leaking to an impostor.
 - An `allow` rule authorizes a host and port, not every URL or service behind it.
 
 ## Build and test
