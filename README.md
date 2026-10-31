@@ -166,17 +166,55 @@ Host vm-proxy-tunnel
 
 Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working.
 
-Example user services:
+### On demand
+
+`vibemaxxer-run COMMAND [ARG...]` (installed next to the binary) runs a command with the proxy variables set, starting the home side only while something needs it. It starts the systemd user unit `vibemaxxer.target`, waits up to 20 s for the client on `127.0.0.1:8080` and the forward on `127.0.0.1:18080`, then runs the command in its own scope. Concurrent commands share one tunnel; it stops when the last one and its subprocesses exit. If the tunnel does not come up, the command is not started.
+
+```ini
+# ~/.config/systemd/user/vibemaxxer.target
+[Unit]
+StopWhenUnneeded=yes
+Wants=vibemaxxer-frpc.service vibemaxxer-ssh.service vibemaxxer-client.service
+
+# ~/.config/systemd/user/vibemaxxer-frpc.service
+[Unit]
+PartOf=vibemaxxer.target
+StopWhenUnneeded=yes
+[Service]
+ExecStart=/usr/bin/frpc -c %h/.config/vibemaxxer/frpc.toml
+Restart=on-failure
+RestartSec=1
+
+# ~/.config/systemd/user/vibemaxxer-ssh.service
+[Unit]
+PartOf=vibemaxxer.target
+StopWhenUnneeded=yes
+After=vibemaxxer-frpc.service
+StartLimitIntervalSec=0
+[Service]
+ExecStart=/usr/bin/ssh -N vm-proxy-tunnel
+Restart=always
+RestartSec=1
+
+# ~/.config/systemd/user/vibemaxxer-client.service
+[Unit]
+PartOf=vibemaxxer.target
+StopWhenUnneeded=yes
+[Service]
+ExecStart=/usr/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.rules
+Restart=on-failure
+```
+
+Adjust the binary paths, run `systemctl --user daemon-reload`, and do not enable the units. Then:
 
 ```sh
-systemd-run --user --unit=vibemaxxer-ssh --property=Restart=always --property=RestartSec=5 ssh -N vm-proxy-tunnel
-systemd-run --user --unit=vibemaxxer-client --property=Restart=on-failure \
-  vibemaxxer client -rules ~/.config/vibemaxxer/client.rules
+vibemaxxer-run claude
+codex() { vibemaxxer-run codex "$@"; }
 ```
 
 ### Applications
 
-Point applications at the client:
+Point applications at the client, or start them with `vibemaxxer-run`:
 
 ```sh
 export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
