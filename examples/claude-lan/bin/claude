@@ -32,4 +32,4 @@ if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] && command -v "$oo7_cli" >/dev/null; th
     unset token
 fi
 
-exec "$vibemaxxer" run --lan -- "$real_claude" "$@"
+exec "$vibemaxxer" run -- "$real_claude" "$@"

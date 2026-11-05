@@ -88,7 +88,7 @@ vibemaxxer server -rules server.rules [-listen 127.0.0.1:8081] [-allow-private]
 vibemaxxer client -rules client.rules -server HOST:PORT -server-key PIN [-key FILE]
 vibemaxxer server -rules server.rules -tls -listen LAN_IP:PORT -client-key PIN [-client-key PIN...] [-key FILE]
 vibemaxxer key [-key FILE]
-vibemaxxer run [--remote | --lan] [--] COMMAND [ARG...]
+vibemaxxer run [--remote] [--] COMMAND [ARG...]
 ```
 
 Client listeners, plaintext server listeners, and `-upstream` must be loopback IP addresses with a nonzero port. Only `server -tls` may listen on a non-loopback address; it requires a concrete unicast IP, never a wildcard. `-listen` defaults to the addresses shown above.
@@ -116,7 +116,7 @@ Each request logs one line with method, host, port, action, rule (`file:line` or
 
 ## On-demand commands
 
-`vibemaxxer run [--remote | --lan] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
+`vibemaxxer run [--remote] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
 
 By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started. Command arguments, terminal access, signals, and exit status are preserved. Use `--` to separate runner options from a command whose name begins with `-`. Only the vibemaxxer binary is needed; no separate runner script is required.
 
@@ -197,21 +197,13 @@ that machine's VPN, DNS, routing, and kill switch separately; vibemaxxer does no
 set up or enforce the VPN.
 
 For on-demand operation, use the local systemd units above, changing the client
-service's `ExecStart` to include `-server` and `-server-key`. Add:
-
-```ini
-# ~/.config/systemd/user/vibemaxxer-lan.target
-[Unit]
-StopWhenUnneeded=yes
-Wants=vibemaxxer.target
-```
-
-Run `systemctl --user daemon-reload`, then `vibemaxxer run --lan claude`. This
-starts only the configured client, not SSH or frp, and checks only the local
-listener; server authentication happens when requests are made. Supervise the
-server separately on the other machine. The three examples share the same
-client port/service, so select one client configuration at a time and restart
-it after changes. Runner flags select startup targets, not routing policies.
+service's `ExecStart` to include `-server` and `-server-key`, then run
+`systemctl --user daemon-reload` and `vibemaxxer run claude`. This starts only
+the configured client, not SSH or frp, and checks only the local listener;
+server authentication happens when requests are made. Supervise the server
+separately on the other machine. The three examples share the same client
+port/service, so select one client configuration at a time and restart it after
+changes.
 
 To revoke a workstation, remove its `-client-key` and restart the server. To rotate
 an identity, generate a new key file and update the corresponding pins on the

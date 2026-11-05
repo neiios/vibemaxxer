@@ -77,13 +77,6 @@ ExecStart=%h/.local/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.ru
 Restart=on-failure
 ```
 
-```ini
-# ~/.config/systemd/user/vibemaxxer-lan.target
-[Unit]
-StopWhenUnneeded=yes
-Wants=vibemaxxer.target
-```
-
 Run `systemctl --user daemon-reload`, but do not enable these units. The runner
 starts the local client on demand and stops it when the last wrapped command and
 its subprocesses exit. It does not start or check an SSH forward. Readiness only
@@ -91,8 +84,7 @@ checks the local client listener; a request verifies the remote TLS identity.
 
 The local, LAN, and SSH examples share a client service and port. Select one
 configuration at a time and restart an already-running client after changing it.
-`--lan` selects the startup target; the service configuration selects transport
-and routing.
+The service configuration selects transport and routing.
 
 ## Run Claude
 
@@ -100,7 +92,7 @@ and routing.
 examples/claude-lan/bin/claude
 ```
 
-The wrapper uses `vibemaxxer run --lan`. `VIBEMAXXER_BINARY` overrides the default
+The wrapper uses `vibemaxxer run`. `VIBEMAXXER_BINARY` overrides the default
 `$HOME/.local/bin/vibemaxxer`, and `CLAUDE_REAL_BINARY` overrides the real Claude
 path (`$HOME/.local/bin/claude`). Do not point that variable at the wrapper.
 

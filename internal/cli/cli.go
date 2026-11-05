@@ -18,7 +18,7 @@ const usage = `Usage: vibemaxxer COMMAND [flags]
 
   client   Local HTTP proxy for applications; blocks domains and forwards other traffic directly
   server   Optional remote HTTP proxy; enforces its own allowlist and egresses
-  run      Run a command with on-demand filtering (--remote for SSH, --lan for LAN TLS)
+  run      Run a command with on-demand filtering (--remote also starts the SSH tunnel)
   key      Print/create this machine's Ed25519 LAN TLS identity fingerprint
 
 Local filtering: vibemaxxer client -rules client.rules
