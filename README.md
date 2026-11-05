@@ -105,7 +105,7 @@ Each request logs one line with method, host, port, action, rule (`file:line` or
 
 `vibemaxxer run [--remote] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
 
-By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started. Command arguments, terminal access, signals, and exit status are preserved. Use `--` to separate runner options from a command whose name begins with `-`. The old `vibemaxxer-run` script remains a compatibility shim; new integrations only need the binary.
+By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started. Command arguments, terminal access, signals, and exit status are preserved. Use `--` to separate runner options from a command whose name begins with `-`. Only the vibemaxxer binary is needed; no separate runner script is required.
 
 ```ini
 # ~/.config/systemd/user/vibemaxxer.target

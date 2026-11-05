@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Compatibility entry point; new integrations should use `vibemaxxer run`.
-bindir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")
-exec "$bindir/vibemaxxer" run "$@"
