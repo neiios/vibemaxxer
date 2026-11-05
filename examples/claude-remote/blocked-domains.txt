@@ -1,2 +1,0 @@
-http-intake.logs.us5.datadoghq.com
-browser-intake-us5-datadoghq.com

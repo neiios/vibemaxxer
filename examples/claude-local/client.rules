@@ -1,5 +1,4 @@
-# Block these domains and all their subdomains.
-
+# Block Claude Code's Datadog telemetry intake (including all subdomains).
 block .http-intake.logs.us5.datadoghq.com
 block .browser-intake-us5-datadoghq.com
 

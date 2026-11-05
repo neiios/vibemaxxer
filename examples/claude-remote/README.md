@@ -7,14 +7,12 @@ pinned-TLS connections between LAN hosts, use [claude-lan](../claude-lan/).
 The old runner's `run -server`, `-blocklist`, and `-proxy-domains` flags are not
 used; LAN TLS transport options belong to the `client` and `server` commands.
 
-- `client.rules` blocks the domains in `blocked-domains.txt`, routes the domains
-  in `claude-proxy-domains.txt` through the remote server, and sends all other
-  traffic directly.
+- `client.rules` blocks Claude Code's Datadog telemetry intake, routes Claude
+  services (`anthropic.com`, `claude.ai`, `claude.com`) through the remote server,
+  and sends all other traffic directly.
 - `server.rules` permits those Claude domains on port 443 only; everything else
   is denied.
-- The original domain lists are retained unchanged for reference. The current
-  binary reads the native `.rules` files, not those lists. If you change a list,
-  update the corresponding rules too. A leading `.` includes all subdomains.
+- A leading `.` includes all subdomains.
 
 ## Install
 

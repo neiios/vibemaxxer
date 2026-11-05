@@ -1,8 +1,8 @@
 # Claude Code with local filtering
 
-Run Claude Code through a local vibemaxxer client. The supplied rules block the
-same domains as `../claude-remote/blocked-domains.txt`; everything else (including
-Claude services) uses your local internet connection. No remote server, SSH
+Run Claude Code through a local vibemaxxer client. The supplied rules block
+Claude Code's Datadog telemetry intake; everything else (including Claude services)
+uses your local internet connection. No remote server, SSH
 forward, server key, or `-upstream` is needed.
 
 ## Setup

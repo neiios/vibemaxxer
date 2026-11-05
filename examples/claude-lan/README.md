@@ -10,7 +10,7 @@ Claude -> client 127.0.0.1:8080 -> BLOCK: 403
                               -> PROXY: pinned TLS -> LAN server -> internet/VPN
 ```
 
-The native rules match the remote example: block the existing blacklist, route
+The native rules match the remote example: block Claude Code's telemetry intake, route
 Claude services through the LAN server, and connect directly for everything
 else. The server permits only those Claude services on port 443. It independently
 checks the policy and resolves proxied destination hostnames.
