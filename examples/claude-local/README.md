@@ -7,8 +7,8 @@ forward, server key, or `-upstream` is needed.
 
 ## Setup
 
-Requires Bash, a systemd user manager, `readlink`, Claude Code, and `oo7-cli`
-(unless `CLAUDE_CODE_OAUTH_TOKEN` is already set).
+Requires Bash, a systemd user manager, `readlink`, and Claude Code. `oo7-cli`
+is optional (see [Run Claude](#run-claude)).
 
 From the repository root, install the binaries and rules:
 
@@ -54,9 +54,11 @@ Override it with `CLAUDE_REAL_BINARY` if necessary; do not point it at the wrapp
 
 Like the remote example, the wrapper disables Claude telemetry and background
 tasks and sets `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`. Review that
-permission setting before use. It uses `CLAUDE_CODE_OAUTH_TOKEN` if set, otherwise
-looks up `service=claude-code account=oauth-token` with `oo7-cli`. Help and version
-requests bypass the proxy and token lookup.
+permission setting before use.
+
+If `CLAUDE_CODE_OAUTH_TOKEN` is unset and `oo7-cli` is installed, the wrapper
+reads it from `service=claude-code account=oauth-token`; otherwise Claude Code
+uses its own login. Help and version requests bypass the proxy and token lookup.
 
 Filtering applies only to traffic that uses the HTTP proxy. Applications that
 ignore proxy settings, or destinations excluded by `NO_PROXY`, bypass it. This

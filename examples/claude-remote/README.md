@@ -16,8 +16,8 @@ used; LAN TLS transport options belong to the `client` and `server` commands.
 
 ## Install
 
-Requires Bash, a systemd user manager, `readlink`, Claude Code, and `oo7-cli`
-(unless `CLAUDE_CODE_OAUTH_TOKEN` is already set). Remote routing also requires
+Requires Bash, a systemd user manager, `readlink`, and Claude Code. `oo7-cli`
+is optional (see [Run Claude](#run)). Remote routing also requires
 an authenticated SSH tunnel to a machine running `vibemaxxer server`.
 
 From the repository root, on the client:
@@ -85,10 +85,10 @@ The old `VIBEMAXXER_SERVER`, `VIBEMAXXER_SERVER_KEY`, `VIBEMAXXER_BLOCKLIST`, an
 `VIBEMAXXER_PROXY_DOMAINS` variables are no longer used: configure the tunnel and
 rules instead.
 
-Authentication uses `CLAUDE_CODE_OAUTH_TOKEN` if set, otherwise `oo7-cli lookup
---secret-only service=claude-code account=oauth-token`. Help and version requests
-bypass authentication and proxy startup. The wrapper disables telemetry and
-background tasks and retains
+If `CLAUDE_CODE_OAUTH_TOKEN` is unset and `oo7-cli` is installed, the wrapper
+reads it from `service=claude-code account=oauth-token`; otherwise Claude Code
+uses its own login. Help and version requests bypass the token lookup and proxy
+startup. The wrapper disables telemetry and background tasks and retains
 `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`; review that permission
 setting before use.
 

@@ -24,13 +24,12 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
 export CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
 
-if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]]; then
-    if ! token=$("$oo7_cli" lookup --secret-only service=claude-code account=oauth-token) || [[ -z $token ]]; then
-        printf 'Claude OAuth token is unavailable. Unlock oo7 and check service=claude-code account=oauth-token.\n' >&2
-        exit 1
+# Optional: read a token stored with oo7. Otherwise Claude Code uses its own login.
+if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] && command -v "$oo7_cli" >/dev/null; then
+    if token=$("$oo7_cli" lookup --secret-only service=claude-code account=oauth-token 2>/dev/null) && [[ -n $token ]]; then
+        export CLAUDE_CODE_OAUTH_TOKEN=$token
     fi
-    export CLAUDE_CODE_OAUTH_TOKEN=$token
+    unset token
 fi
-unset token
 
 exec "$vibemaxxer" run -- "$real_claude" "$@"

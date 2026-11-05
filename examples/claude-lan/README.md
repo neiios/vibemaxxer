@@ -105,10 +105,11 @@ The wrapper uses `vibemaxxer run --lan`. `VIBEMAXXER_BINARY` overrides the defau
 `$HOME/.local/bin/vibemaxxer`, and `CLAUDE_REAL_BINARY` overrides the real Claude
 path (`$HOME/.local/bin/claude`). Do not point that variable at the wrapper.
 
-As in the other examples, Bash and `readlink` are required. Authentication uses
-`CLAUDE_CODE_OAUTH_TOKEN` if present, otherwise `oo7-cli` retrieves
-`service=claude-code account=oauth-token`. Help/version bypass proxy startup.
-The wrapper disables telemetry and background tasks and retains
+As in the other examples, Bash and `readlink` are required. If
+`CLAUDE_CODE_OAUTH_TOKEN` is unset and `oo7-cli` is installed, the wrapper reads
+it from `service=claude-code account=oauth-token`; otherwise Claude Code uses its
+own login. Help/version bypass proxy startup. The wrapper disables telemetry and
+background tasks and retains
 `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`; review that setting before
 use.
 
