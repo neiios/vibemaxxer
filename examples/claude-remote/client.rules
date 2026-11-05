@@ -1,0 +1,11 @@
+# Block these domains and all their subdomains.
+
+block .http-intake.logs.us5.datadoghq.com
+block .browser-intake-us5-datadoghq.com
+
+# Claude services use the remote server (including all subdomains).
+proxy .anthropic.com
+proxy .claude.ai
+proxy .claude.com
+
+# Everything else connects directly.

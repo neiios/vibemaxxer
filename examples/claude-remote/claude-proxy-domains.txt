@@ -1,0 +1,5 @@
+# Claude Code API, authentication, and Claude services.
+# Each rule includes all subdomains (e.g. api.anthropic.com).
+anthropic.com
+claude.ai
+claude.com

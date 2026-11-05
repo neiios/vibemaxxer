@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readlink=readlink
+oo7_cli=oo7-cli
+vibemaxxer_run=${VIBEMAXXER_RUN:-"$HOME/.local/bin/vibemaxxer-run"}
+real_claude=${CLAUDE_REAL_BINARY:-"$HOME/.local/bin/claude"}
+
+[[ -x "$real_claude" ]] || {
+    printf 'Missing Claude executable: %s\n' "$real_claude" >&2
+    exit 1
+}
+if [[ "$("$readlink" -f -- "$real_claude")" == "$("$readlink" -f -- "${BASH_SOURCE[0]}")" ]]; then
+    printf 'CLAUDE_REAL_BINARY must not point to this wrapper.\n' >&2
+    exit 1
+fi
+if [[ $# == 1 && ( $1 == --version || $1 == -v || $1 == --help || $1 == -h ) ]]; then
+    exec "$real_claude" "$@"
+fi
+
+export DISABLE_TELEMETRY=1
+export DISABLE_ERROR_REPORTING=1
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
+export CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
+
+if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]]; then
+    if ! token=$("$oo7_cli" lookup --secret-only service=claude-code account=oauth-token) || [[ -z $token ]]; then
+        printf 'Claude OAuth token is unavailable. Unlock oo7 and check service=claude-code account=oauth-token.\n' >&2
+        exit 1
+    fi
+    export CLAUDE_CODE_OAUTH_TOKEN=$token
+fi
+unset token
+
+exec "$vibemaxxer_run" -- "$real_claude" "$@"
