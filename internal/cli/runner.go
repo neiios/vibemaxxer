@@ -12,15 +12,18 @@ import (
 	"time"
 )
 
-const runnerUsage = "usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]"
+const runnerUsage = "usage: vibemaxxer run [--remote | --lan] [--] COMMAND [ARG...]"
 
 func runCommand(args []string) error {
-	remote := false
+	remote, lan := false, false
 parse:
 	for len(args) > 0 {
 		switch args[0] {
 		case "--remote":
 			remote = true
+			args = args[1:]
+		case "--lan":
+			lan = true
 			args = args[1:]
 		case "--":
 			args = args[1:]
@@ -35,6 +38,9 @@ parse:
 			break parse
 		}
 	}
+	if remote && lan {
+		return fmt.Errorf("--remote and --lan are mutually exclusive; %s", runnerUsage)
+	}
 	if len(args) == 0 {
 		return errors.New(runnerUsage)
 	}
@@ -43,6 +49,8 @@ parse:
 		target := "vibemaxxer.target"
 		if remote {
 			target = "vibemaxxer-remote.target"
+		} else if lan {
+			target = "vibemaxxer-lan.target"
 		}
 		self, err := os.Executable()
 		if err != nil {
@@ -52,6 +60,8 @@ parse:
 			"-p", "Wants=" + target, "-p", "After=" + target, "--", self, "run"}
 		if remote {
 			command = append(command, "--remote")
+		} else if lan {
+			command = append(command, "--lan")
 		}
 		command = append(command, "--")
 		command = append(command, args...)

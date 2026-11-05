@@ -8,6 +8,16 @@ app ─▶ vibemaxxer client ──DIRECT──▶ internet (local egress)
                          ──PROXY───▶ optional upstream ─▶ vibemaxxer server ─▶ internet (remote egress)
 ```
 
+Three deployment options share the same routing rules:
+
+| Mode | Transport to the egress machine | Typical use |
+| --- | --- | --- |
+| Local | None | Filter traffic on this computer |
+| LAN TLS | Built-in TLS 1.3 with pinned Ed25519 identities | Two computers on the same network |
+| SSH/frp remote | SSH forward, optionally over frp XTCP | Home computer and a remote VM on different networks |
+
+LAN TLS restores the old pinned-TLS architecture without replacing the current SSH/frp option. It needs a reachable server; it does not perform NAT traversal. See the [LAN example](examples/claude-lan/) and [LAN setup](#lan-remote-deployment).
+
 Standalone filtering needs only `vibemaxxer client` and a rules file. No remote server, SSH, frp, or systemd is required. Both `client` and the optional `server` are standard HTTP/1.1 forward proxies: `CONNECT host:port` for HTTPS and absolute-form requests for plain HTTP. TLS stays end to end; nothing is intercepted. Filtering is by hostname, not URL path or page content.
 
 ## Quick start: local filtering
@@ -36,7 +46,7 @@ curl https://example.com
 
 The domains above are placeholders; replace them with the domains you want to block. Applications must use the proxy for filtering to apply. `NO_PROXY` entries and applications that ignore proxy settings bypass vibemaxxer.
 
-For automatic startup around a command, see [On-demand commands](#on-demand-commands). For remote routing, configure an explicit `-upstream` and add `proxy` rules as described below.
+For automatic startup around a command, see [On-demand commands](#on-demand-commands). For remote routing, configure either `-upstream` (SSH) or `-server` and `-server-key` (LAN TLS), and add `proxy` rules as described below.
 
 ## Rules
 
@@ -46,7 +56,7 @@ Each mode reads its own native rules file. One rule per line, `#` starts a comme
 # client.rules
 block .ads.example          # never connect
 block .telemetry.example
-# Optional: these rules require -upstream
+# Optional: these rules require -upstream or -server with -server-key
 proxy .anthropic.com        # send through the server
 proxy api.openai.com
 # everything else: DIRECT
@@ -66,7 +76,7 @@ deny  admin.internal.example
 - `allow` checks the destination port as well. `proxy` rules ignore the port; the server decides.
 - Names are matched case-insensitively, without a trailing dot. Only ASCII names are accepted; write international names in punycode (`xn--…`).
 - IP-literal destinations are refused in both modes. Applications must use hostnames.
-- Files are validated at startup; any error stops the process. A client rules file containing `proxy` rules requires an explicit `-upstream`, even if a `block` rule shadows them. Restart to apply changes. Existing tunnels keep running until they close.
+- Files are validated at startup; any error stops the process. A client rules file containing `proxy` rules requires an explicit `-upstream` or `-server` with `-server-key`, even if a `block` rule shadows them. Restart to apply changes. Existing tunnels keep running until they close.
 
 When remote routing is enabled, the two policies are independent: the server never trusts the client's decision, and the client never falls back to DIRECT when the server or tunnel fails. Blocked domains are not resolved or contacted.
 
@@ -75,10 +85,15 @@ When remote routing is enabled, the two policies are independent: the server nev
 ```sh
 vibemaxxer client -rules client.rules [-listen 127.0.0.1:8080] [-upstream 127.0.0.1:18080] [-allow-private]
 vibemaxxer server -rules server.rules [-listen 127.0.0.1:8081] [-allow-private]
-vibemaxxer run [--remote] [--] COMMAND [ARG...]
+vibemaxxer client -rules client.rules -server HOST:PORT -server-key PIN [-key FILE]
+vibemaxxer server -rules server.rules -tls -listen LAN_IP:PORT -client-key PIN [-client-key PIN...] [-key FILE]
+vibemaxxer key [-key FILE]
+vibemaxxer run [--remote | --lan] [--] COMMAND [ARG...]
 ```
 
-`-listen` and, when supplied, `-upstream` must be loopback IP addresses with a nonzero port. `-listen` defaults to the addresses shown above. **There is no default upstream**: omit `-upstream` for local filtering, or set it to the local end of the SSH forward to enable `proxy` rules. Merely supplying `-upstream` does not route unmatched traffic remotely.
+Client listeners, plaintext server listeners, and `-upstream` must be loopback IP addresses with a nonzero port. Only `server -tls` may listen on a non-loopback address; it requires a concrete unicast IP, never a wildcard. `-listen` defaults to the addresses shown above.
+
+**There is no default upstream**: omit both `-upstream` and `-server` for local filtering. Choose `-upstream` for an SSH forward or `-server HOST:PORT -server-key PIN` for LAN TLS; they are mutually exclusive. Supplying either transport does not route unmatched traffic remotely. `-key` is only used with LAN TLS.
 
 **Existing remote deployments:** add `-upstream 127.0.0.1:18080` to the client command; the previous implicit upstream is no longer used.
 
@@ -103,7 +118,7 @@ Each request logs one line with method, host, port, action, rule (`file:line` or
 
 ## On-demand commands
 
-`vibemaxxer run [--remote] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
+`vibemaxxer run [--remote | --lan] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
 
 By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started. Command arguments, terminal access, signals, and exit status are preserved. Use `--` to separate runner options from a command whose name begins with `-`. Only the vibemaxxer binary is needed; no separate runner script is required.
 
@@ -132,9 +147,82 @@ codex() { vibemaxxer run codex "$@"; }
 
 For optional remote routing, configure the client with `-upstream` and install the [remote on-demand services](#remote-on-demand-services), then use `vibemaxxer run --remote COMMAND [ARG...]`. That mode additionally starts the remote target and waits for the SSH forward on `127.0.0.1:18080`. The flag starts infrastructure; it does not change the client's rules or flags.
 
+## LAN remote deployment
+
+Use this when the computers can reach each other directly, usually on the same LAN:
+
+```text
+app -> client 127.0.0.1:8080 -> pinned mutual TLS 1.3 -> server LAN_IP:8443 -> internet
+                            (no SSH or frp)
+```
+
+On **each** machine, create or load its identity and print its public fingerprint:
+
+```sh
+vibemaxxer key
+```
+
+Exchange fingerprints over a trusted channel. Identities are stored at
+`~/.config/vibemaxxer/identity.pem`; `-key FILE` overrides the path. Existing
+Ed25519 identity files from the old architecture are compatible. Keep the PEM
+private; fingerprints are public. Certificates are self-signed, and peer public
+keys are pinned instead of relying on a CA or hostname certificate.
+
+On the egress machine, create `server.rules` with `allow` rules and run:
+
+```sh
+vibemaxxer server -tls -listen 192.168.1.50:8443 \
+  -client-key WORKSTATION_FINGERPRINT -rules server.rules
+```
+
+Repeat `-client-key` for each permitted workstation. An empty allowlist is
+refused. Bind only the desired interface and restrict the port to your LAN with
+your firewall. No plaintext listener is added. TLS versions below 1.3, missing
+client identities, and unknown client identities are rejected before HTTP
+requests are processed.
+
+On the workstation, create `client.rules` with `proxy` rules and run:
+
+```sh
+vibemaxxer client -rules client.rules \
+  -server 192.168.1.50:8443 -server-key EGRESS_MACHINE_FINGERPRINT
+```
+
+Point applications at `http://127.0.0.1:8080`, as in local mode. Both CONNECT and
+plain HTTP requests use the authenticated TLS hop. The server independently
+checks domain/port rules, resolves proxied destinations, and enforces the same
+IP safety policy as the SSH mode. A pin mismatch or unavailable server returns
+an error, never a plaintext retry or DIRECT fallback. Unmatched DIRECT requests
+still work locally. Application HTTPS remains end to end inside the TLS hop.
+
+The egress machine uses its normal network routing. To exit via a VPN, configure
+that machine's VPN, DNS, routing, and kill switch separately; vibemaxxer does not
+set up or enforce the VPN.
+
+For on-demand operation, use the local systemd units above, changing the client
+service's `ExecStart` to include `-server` and `-server-key`. Add:
+
+```ini
+# ~/.config/systemd/user/vibemaxxer-lan.target
+[Unit]
+StopWhenUnneeded=yes
+Wants=vibemaxxer.target
+```
+
+Run `systemctl --user daemon-reload`, then `vibemaxxer run --lan claude`. This
+starts only the configured client, not SSH or frp, and checks only the local
+listener; server authentication happens when requests are made. Supervise the
+server separately on the other machine. The three examples share the same
+client port/service, so select one client configuration at a time and restart
+it after changes. Runner flags select startup targets, not routing policies.
+
+To revoke a workstation, remove its `-client-key` and restart the server. To rotate
+an identity, generate a new key file and update the corresponding pins on the
+other machines. Keep a backup until the change is verified.
+
 ## Optional remote deployment
 
-Skip this section for standalone filtering. The example uses a public coordinator `frp.example.net`, a VM running sshd, and a home machine. Proxied names are never resolved at home; the server resolves them, so names that only exist on the VM work.
+Use this SSH/frp option for machines on different networks. Skip this section for local filtering or LAN TLS. The example uses a public coordinator `frp.example.net`, a VM running sshd, and a home machine. Proxied names are never resolved at home; the server resolves them, so names that only exist on the VM work.
 
 vibemaxxer decides per hostname and forwards HTTP. The remote connection is handled by existing tools:
 
@@ -309,7 +397,8 @@ curl https://api.ipify.org     # exits from home or the VM depending on the rule
 ## Security
 
 - Any local process can use the loopback listeners. The server's rules bound what a compromised one can reach through the VM.
-- When remote routing is enabled, SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads. A compromised or impersonated coordinator can break rendezvous, not read or redirect the tunnel; pinning its certificate also keeps the frp token from leaking to an impostor.
+- LAN TLS authenticates both ends using pinned Ed25519 public keys and TLS 1.3. Protect `identity.pem` as a credential. The SSH mode continues to use OpenSSH keys instead.
+- In the SSH/frp remote mode, SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads. A compromised or impersonated coordinator can break rendezvous, not read or redirect the tunnel; pinning its certificate also keeps the frp token from leaking to an impostor.
 - An `allow` rule authorizes a host and port, not every URL or service behind it.
 
 ## Build and test
@@ -330,6 +419,7 @@ nix flake check    # includes the end-to-end test below; needs KVM
 `nix/e2e.nix` boots three QEMU VMs (coordinator, home, VM) with public test addresses and no inbound access to home or the VM. It runs frps with an RFC 5780 STUN server, frpc XTCP without fallback, the restricted sshd account and both vibemaxxer modes. It checks:
 
 - Standalone HTTP and HTTPS filtering with no upstream configured and SSH/frp stopped on the client.
+- Direct LAN TLS routing without SSH/frp, server/client pin rejection, independent server policy, and no DIRECT fallback on server loss.
 - DIRECT and PROXY egress addresses, and names that resolve only on the VM.
 - Client blocks and server denials, including port mismatches, rebinding to loopback and IP literals.
 - Log redaction.

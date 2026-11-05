@@ -60,12 +60,18 @@ func TestRunnerModes(t *testing.T) {
 	// Readiness checks only need a TCP listener, not an HTTP server or tunnel.
 	runnerListener(t, "127.0.0.1:8080")
 	upstream := runnerListener(t, "127.0.0.1:18080")
-	for _, remote := range []bool{false, true} {
-		name, target := "local", "vibemaxxer.target"
+	for _, mode := range []struct {
+		name, option, target string
+	}{
+		{"local", "", "vibemaxxer.target"},
+		{"remote", "--remote", "vibemaxxer-remote.target"},
+		{"lan", "--lan", "vibemaxxer-lan.target"},
+	} {
+		name, target := mode.name, mode.target
+		remote := mode.name == "remote"
 		var args []string
-		if remote {
-			name, target = "remote", "vibemaxxer-remote.target"
-			args = append(args, "--remote")
+		if mode.option != "" {
+			args = append(args, mode.option)
 		}
 		t.Run(name, func(t *testing.T) {
 			args = append(args, "--", "bash", "-c", `printf '%s\n' "$HTTP_PROXY" "$HTTPS_PROXY" "$http_proxy" "$https_proxy" "${VIBEMAXXER_RUN_SCOPE-unset}" "$@"`,
@@ -134,7 +140,7 @@ func TestRunnerMissingProxy(t *testing.T) {
 }
 
 func TestRunnerUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"--remote"}, {"--"}, {"--unknown"}} {
+	for _, args := range [][]string{nil, {"--remote"}, {"--lan"}, {"--remote", "--lan", "true"}, {"--lan", "--remote", "true"}, {"--"}, {"--unknown"}} {
 		cmd, argsFile := runnerCommand(t, args...)
 		out, err := cmd.CombinedOutput()
 		if _, statErr := os.Stat(argsFile); !os.IsNotExist(statErr) {
@@ -145,7 +151,7 @@ func TestRunnerUsage(t *testing.T) {
 		}
 	}
 	cmd, _ := runnerCommand(t, "--help")
-	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "[--remote]") {
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "[--remote | --lan]") {
 		t.Errorf("help: %q, %v", out, err)
 	}
 }

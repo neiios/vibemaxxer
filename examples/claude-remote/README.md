@@ -1,9 +1,11 @@
 # Claude Code with remote routing
 
 This example uses the current `vibemaxxer client` / `server` commands and
-`vibemaxxer run --remote`. The old `run -server`, `-server-key`,
-`-blocklist`, and `-proxy-domains` flags are no longer used. SSH now provides
-transport encryption and peer authentication; there is no vibemaxxer server key.
+`vibemaxxer run --remote`. SSH provides transport encryption and peer
+authentication; this example does not use vibemaxxer identity pins. For direct
+pinned-TLS connections between LAN hosts, use [claude-lan](../claude-lan/).
+The old runner's `run -server`, `-blocklist`, and `-proxy-domains` flags are not
+used; LAN TLS transport options belong to the `client` and `server` commands.
 
 - `client.rules` blocks the domains in `blocked-domains.txt`, routes the domains
   in `claude-proxy-domains.txt` through the remote server, and sends all other

@@ -1,0 +1,6 @@
+# Allow Claude services and all their subdomains on HTTPS only.
+allow .anthropic.com 443
+allow .claude.ai 443
+allow .claude.com 443
+
+# Everything else is denied.

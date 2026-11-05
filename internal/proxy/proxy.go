@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -29,29 +30,52 @@ const (
 )
 
 type Proxy struct {
-	name     string
-	policy   *policy.Policy
-	upstream string
-	dial     DialFunc
-	logger   *slog.Logger
-	slots    chan struct{}
-	direct   *http.Transport
-	proxied  *http.Transport
-	idle     time.Duration
+	name         string
+	policy       *policy.Policy
+	upstream     string
+	upstreamDial DialFunc
+	dial         DialFunc
+	logger       *slog.Logger
+	slots        chan struct{}
+	direct       *http.Transport
+	proxied      *http.Transport
+	idle         time.Duration
 }
 
 func New(name string, rules *policy.Policy, upstream string, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
+	return newProxy(name, rules, upstream, nil, dial, logger)
+}
+
+// NewTLS uses an authenticated TLS connection to the upstream instead of a
+// loopback SSH forward. Only the upstream hop uses this config, never origins.
+func NewTLS(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
+	if config == nil || upstream == "" {
+		return nil, errors.New("TLS upstream requires an address and TLS configuration")
+	}
+	return newProxy(name, rules, upstream, config.Clone(), dial, logger)
+}
+
+func newProxy(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
 	if upstream == "" && rules.RequiresUpstream() {
-		return nil, errors.New("proxy rules require -upstream; configure an upstream or remove the proxy rules")
+		return nil, errors.New("proxy rules require -upstream (SSH) or -server and -server-key (LAN TLS)")
 	}
 	p := &Proxy{name: name, policy: rules, upstream: upstream, dial: dial, logger: logger,
 		slots: make(chan struct{}, maxActive), idle: idleTimeout,
 		direct: &http.Transport{DialContext: dial, IdleConnTimeout: time.Minute}}
 	if upstream != "" {
+		netDialer := &net.Dialer{Timeout: upstreamTimeout}
+		p.upstreamDial = netDialer.DialContext
+		scheme := "http"
+		if config != nil {
+			scheme = "https"
+			p.upstreamDial = (&tls.Dialer{NetDialer: netDialer, Config: config}).DialContext
+		}
 		p.proxied = &http.Transport{
-			Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: upstream}),
-			DialContext:     (&net.Dialer{Timeout: upstreamTimeout}).DialContext,
-			IdleConnTimeout: time.Minute,
+			Proxy:               http.ProxyURL(&url.URL{Scheme: scheme, Host: upstream}),
+			DialContext:         netDialer.DialContext,
+			TLSClientConfig:     config,
+			TLSHandshakeTimeout: headerTimeout,
+			IdleConnTimeout:     time.Minute,
 		}
 	}
 	return p, nil
@@ -232,7 +256,7 @@ func upstreamFailure(err error) *failure {
 func (p *Proxy) connectUpstream(ctx context.Context, address string) (net.Conn, io.Reader, error) {
 	ctx, cancel := context.WithTimeout(ctx, upstreamTimeout)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.upstream)
+	conn, err := p.upstreamDial(ctx, "tcp", p.upstream)
 	if err != nil {
 		return nil, nil, upstreamFailure(err)
 	}

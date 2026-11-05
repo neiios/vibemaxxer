@@ -331,5 +331,47 @@ in
         for rule in UDP_BLOCK:
             aws.succeed(f"{rule.replace('ACTION', '-D')} -j DROP")
         home.wait_until_succeeds(f"{CURL} https://proxied.example/ | grep -q '^{AWS} '", timeout=timedelta(minutes=3))
+
+    with subtest("LAN TLS works without SSH or frp"):
+        home.systemctl("stop ssh-tunnel.service frpc.service")
+        aws.systemctl("stop frpc.service")
+        # Simulate a reachable LAN service while keeping the SSH port firewalled.
+        aws.succeed("iptables -I INPUT -s ${ip.home} -p tcp --dport 8443 -j ACCEPT")
+        binary = "${package}/bin/vibemaxxer"
+        home_pin = home.succeed(f"{binary} key -key /tmp/home-lan.pem").strip()
+        aws_pin = aws.succeed(f"{binary} key -key /tmp/aws-lan.pem").strip()
+        aws.succeed(f"systemd-run --unit=vibemaxxer-lan-server {binary} server -tls "
+                    f"-listen {AWS}:8443 -key /tmp/aws-lan.pem -client-key {home_pin} -rules ${serverRules}")
+        aws.wait_for_unit("vibemaxxer-lan-server.service")
+        home.succeed(f"systemd-run --unit=vibemaxxer-lan-client {binary} client "
+                     f"-listen 127.0.0.1:8083 -key /tmp/home-lan.pem -server {AWS}:8443 "
+                     f"-server-key {aws_pin} -rules ${clientRules}")
+        home.wait_for_open_port(8083)
+        LAN_CURL = CURL.replace(":8080", ":8083")
+        home.fail("getent hosts proxied.example")
+        assert egress("https://proxied.example/", LAN_CURL) == AWS
+        assert egress("http://www.proxied.example/", LAN_CURL) == AWS
+        assert egress("https://direct.example/", LAN_CURL) == HOME
+        refused("https://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LAN_CURL)
+        refused("https://denied.example/", 403, "vibemaxxer-server; error=http_request_denied", LAN_CURL)
+        refused("https://sneaky.example/", 403, "vibemaxxer-server; error=destination_ip_prohibited", LAN_CURL)
+
+    with subtest("LAN TLS pins fail closed"):
+        for name, key, pin in [("bad-pin", "/tmp/home-lan.pem", "0" * 64),
+                               ("unknown-client", "/tmp/unknown-lan.pem", aws_pin)]:
+            home.succeed(f"systemd-run --unit=vibemaxxer-lan-{name} {binary} client "
+                         f"-listen 127.0.0.1:8084 -key {key} -server {AWS}:8443 "
+                         f"-server-key {pin} -rules ${clientRules}")
+            home.wait_for_open_port(8084)
+            bad_curl = CURL.replace(":8080", ":8084")
+            refused("https://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", bad_curl)
+            refused("http://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", bad_curl)
+            assert egress("https://direct.example/", bad_curl) == HOME
+            home.systemctl(f"stop vibemaxxer-lan-{name}.service")
+
+    with subtest("LAN server loss never falls back to DIRECT"):
+        aws.systemctl("stop vibemaxxer-lan-server.service")
+        refused("https://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", LAN_CURL)
+        assert egress("https://direct.example/", LAN_CURL) == HOME
   '';
 }

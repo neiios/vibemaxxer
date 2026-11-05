@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,10 +18,13 @@ const usage = `Usage: vibemaxxer COMMAND [flags]
 
   client   Local HTTP proxy for applications; blocks domains and forwards other traffic directly
   server   Optional remote HTTP proxy; enforces its own allowlist and egresses
-  run      Run a command with on-demand local filtering (or --remote routing)
+  run      Run a command with on-demand filtering (--remote for SSH, --lan for LAN TLS)
+  key      Print/create this machine's Ed25519 LAN TLS identity fingerprint
 
 Local filtering: vibemaxxer client -rules client.rules
-Remote routing: add -upstream 127.0.0.1:18080 and proxy rules to send selected domains via the server.
+SSH remote routing: client -upstream 127.0.0.1:18080 plus proxy rules.
+LAN remote routing: client -server HOST:PORT -server-key PIN plus proxy rules;
+                    server -tls -client-key PIN -listen LAN_IP:PORT.
 Use COMMAND -help for flags.`
 
 func Main(args []string) int {
@@ -41,6 +45,8 @@ func Run(logger *slog.Logger, args []string) error {
 	switch args[0] {
 	case "run":
 		return runCommand(args[1:])
+	case "key":
+		return keyCommand(args[1:])
 	case "client":
 		return run(logger, "client", policy.Client, "127.0.0.1:8080", args[1:])
 	case "server":
@@ -55,12 +61,14 @@ func Run(logger *slog.Logger, args []string) error {
 
 func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen string, args []string) error {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	listen := flags.String("listen", defaultListen, "loopback IP:PORT to accept proxy requests on")
+	listen := flags.String("listen", defaultListen, "IP:PORT to accept proxy requests on (loopback unless server -tls)")
 	rules := flags.String("rules", "", "rules file (required)")
 	allowPrivate := flags.Bool("allow-private", false, "permit private and local-network destination addresses")
+	var lan lanOptions
+	lan.flags(flags, mode)
 	var upstream string
 	if mode == policy.Client {
-		flags.StringVar(&upstream, "upstream", "", "optional loopback IP:PORT of the SSH forward to the server (required by proxy rules)")
+		flags.StringVar(&upstream, "upstream", "", "loopback IP:PORT of the SSH forward (alternative to -server for proxy rules)")
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -68,7 +76,16 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q; see -help", flags.Arg(0))
 	}
-	if err := loopback("-listen", *listen); err != nil {
+	keySet := false
+	flags.Visit(func(f *flag.Flag) { keySet = keySet || f.Name == "key" })
+	if err := lan.validate(mode, upstream, keySet); err != nil {
+		return err
+	}
+	validateListen := func(value string) error { return loopback("-listen", value) }
+	if lan.tls {
+		validateListen = lanListen
+	}
+	if err := validateListen(*listen); err != nil {
 		return err
 	}
 	if upstream != "" {
@@ -87,7 +104,17 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	p, err := proxy.New("vibemaxxer-"+name, pol, upstream, dial, logger)
+	tlsConfig, err := lan.config(mode)
+	if err != nil {
+		return err
+	}
+	var p *proxy.Proxy
+	if lan.server != "" {
+		upstream = lan.server
+		p, err = proxy.NewTLS("vibemaxxer-"+name, pol, upstream, tlsConfig, dial, logger)
+	} else {
+		p, err = proxy.New("vibemaxxer-"+name, pol, upstream, dial, logger)
+	}
 	if err != nil {
 		return err
 	}
@@ -95,7 +122,16 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	logger.Info("listening", "mode", name, "address", listener.Addr(), "rules", *rules, "upstream", upstream, "allow_private", *allowPrivate)
+	if lan.tls {
+		listener = tls.NewListener(listener, tlsConfig)
+	}
+	transport := "none"
+	if lan.server != "" || lan.tls {
+		transport = "tls"
+	} else if upstream != "" {
+		transport = "ssh-forward"
+	}
+	logger.Info("listening", "mode", name, "address", listener.Addr(), "rules", *rules, "upstream", upstream, "transport", transport, "allow_private", *allowPrivate)
 	return p.Server().Serve(listener)
 }
 
