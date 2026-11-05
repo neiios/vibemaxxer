@@ -110,6 +110,29 @@ allow *  8443
 	}
 }
 
+func TestRequiresUpstream(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode  Mode
+		rules string
+		want  bool
+	}{
+		{Client, "", false},
+		{Client, "block .ads.example", false},
+		{Client, "proxy .remote.example", true},
+		{Client, "block *\nproxy .remote.example", true},
+		{Server, "allow .remote.example\ndeny secret.remote.example", false},
+	} {
+		p, err := Parse("rules", tc.rules, tc.mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.RequiresUpstream(); got != tc.want {
+			t.Errorf("mode %d, %q: RequiresUpstream() = %v, want %v", tc.mode, tc.rules, got, tc.want)
+		}
+	}
+}
+
 func TestParseRejects(t *testing.T) {
 	t.Parallel()
 	for mode, lines := range map[Mode][]string{

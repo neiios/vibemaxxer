@@ -123,7 +123,11 @@ func newChain(t *testing.T) *chain {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.server = serve(t, New("vibemaxxer-server", serverPolicy, "", c.serverDNS.dial, logger))
+	server, err := New("vibemaxxer-server", serverPolicy, "", c.serverDNS.dial, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.server = serve(t, server)
 	c.clientPolicy = clientPolicy
 	c.clientP, c.client = c.newClient(t, c.server, idleTimeout)
 	return c
@@ -131,7 +135,10 @@ func newChain(t *testing.T) *chain {
 
 func (c *chain) newClient(t *testing.T, upstream string, idle time.Duration) (*Proxy, string) {
 	t.Helper()
-	p := New("vibemaxxer-client", c.clientPolicy, upstream, c.clientDNS.dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", c.clientPolicy, upstream, c.clientDNS.dial, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.idle = idle
 	return p, serve(t, p)
 }
@@ -169,6 +176,85 @@ func assertEcho(t *testing.T, conn net.Conn, reader *bufio.Reader, early, payloa
 	}
 	if string(got) != early+payload {
 		t.Fatalf("echo = %q, want %q", got, early+payload)
+	}
+}
+
+func TestStandaloneFiltering(t *testing.T) {
+	t.Parallel()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "direct response")
+	}))
+	t.Cleanup(origin.Close)
+	dns := &resolver{names: map[string]string{
+		"direct.test:443": echoServer(t),
+		"direct.test:80":  strings.TrimPrefix(origin.URL, "http://"),
+	}}
+	rules, err := policy.Parse("filter.rules", "block .blocked.test\n", policy.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New("vibemaxxer-client", rules, "", dns.dial, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.proxied != nil {
+		t.Fatal("standalone proxy initialized an upstream transport")
+	}
+	address := serve(t, p)
+	for _, target := range []string{"direct.test:443", "blocked.test:443", "sub.blocked.test:443"} {
+		conn, reader, resp := connect(t, address, target, "")
+		if target == "direct.test:443" {
+			if resp.StatusCode != http.StatusOK {
+				t.Fatal(resp.Status)
+			}
+			assertEcho(t, conn, reader, "", "standalone tunnel")
+		} else if resp.StatusCode != http.StatusForbidden || !strings.Contains(resp.Header.Get("Proxy-Status"), "http_request_denied") {
+			t.Fatalf("%s: %s %q", target, resp.Status, resp.Header.Get("Proxy-Status"))
+		}
+	}
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(conn)
+	for _, tc := range []struct {
+		host   string
+		status int
+		body   string
+	}{
+		{"direct.test", http.StatusOK, "direct response"},
+		{"blocked.test", http.StatusForbidden, "http_request_denied"},
+		{"sub.blocked.test", http.StatusForbidden, "http_request_denied"},
+	} {
+		fmt.Fprintf(conn, "GET http://%s/path HTTP/1.1\r\nHost: %s\r\n\r\n", tc.host, tc.host)
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != tc.status || !strings.Contains(string(body), tc.body) {
+			t.Fatalf("%s: %s %q, %v", tc.host, resp.Status, body, err)
+		}
+	}
+	for _, address := range dns.log() {
+		if address != "direct.test:443" && address != "direct.test:80" {
+			t.Fatalf("blocked destination was dialed: %s", address)
+		}
+	}
+}
+
+func TestProxyRulesRequireUpstream(t *testing.T) {
+	t.Parallel()
+	rules, err := policy.Parse("client.rules", clientRules, policy.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New("vibemaxxer-client", rules, "", nil, slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "proxy rules require -upstream") || p != nil {
+		t.Fatalf("New without upstream = %v, %v", p, err)
 	}
 }
 
@@ -289,6 +375,22 @@ func TestUpstreamUnavailable(t *testing.T) {
 	_, _, resp = connect(t, client, "proxied.test:443", "")
 	if resp.StatusCode != 502 {
 		t.Fatalf("refused upstream: %d", resp.StatusCode)
+	}
+	httpConn, err := net.Dial("tcp", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer httpConn.Close()
+	_ = httpConn.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprint(httpConn, "GET http://proxied.test/ HTTP/1.1\r\nHost: proxied.test\r\n\r\n")
+	httpResp, err := http.ReadResponse(bufio.NewReader(httpConn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, httpResp.Body)
+	httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("refused HTTP upstream: %s", httpResp.Status)
 	}
 	conn, reader, resp := connect(t, client, "direct.test:443", "")
 	if resp.StatusCode != 200 {

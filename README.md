@@ -1,39 +1,59 @@
 # vibemaxxer
 
-Domain-routed HTTP proxy for sending selected traffic out of a remote machine (for example, a private AWS VM) while everything else exits from home. One static Go binary, standard library only, two modes:
+Local HTTP/HTTPS filtering proxy with optional domain-based remote routing. Block advertising and telemetry domains, forward everything else directly, and optionally send selected domains through a remote machine. One static Go binary, standard library only.
 
 ```text
-app ─▶ vibemaxxer client ──DIRECT──▶ internet (exits from home)
+app ─▶ vibemaxxer client ──DIRECT──▶ internet (local egress)
        127.0.0.1:8080    ──BLOCK───▶ 403
-                         ──PROXY───▶ ssh -L 127.0.0.1:18080 ═▶ frp XTCP (direct UDP) ═▶ sshd
-                                                                    vibemaxxer server 127.0.0.1:8081 ─▶ internet (exits from VM)
+                         ──PROXY───▶ optional upstream ─▶ vibemaxxer server ─▶ internet (remote egress)
 ```
 
-vibemaxxer does one job: decide per hostname, and forward HTTP. The rest is done by tools that already do it well:
+Standalone filtering needs only `vibemaxxer client` and a rules file. No remote server, SSH, frp, or systemd is required. Both `client` and the optional `server` are standard HTTP/1.1 forward proxies: `CONNECT host:port` for HTTPS and absolute-form requests for plain HTTP. TLS stays end to end; nothing is intercepted. Filtering is by hostname, not URL path or page content.
 
-| Concern | Tool |
-| --- | --- |
-| NAT traversal, rendezvous, no relay | [frp](https://gofrp.org) XTCP (`frps` on a public host, `frpc` on both ends) |
-| Encryption, peer authentication, key management | OpenSSH local forward to a restricted account |
-| Routing by domain, destination policy, egress | vibemaxxer `client` (home) and `server` (VM) |
-| Process supervision | systemd or your service manager |
+## Quick start: local filtering
 
-Both modes are standard HTTP/1.1 forward proxies: `CONNECT host:port` for HTTPS and absolute-form requests for plain HTTP. TLS stays end to end; nothing is intercepted. Proxied names are never resolved at home; the server resolves them, so names that only exist on the VM work.
+Create `client.rules`:
+
+```text
+block .ads.example
+block .telemetry.example
+# everything else: DIRECT
+```
+
+Run the proxy:
+
+```sh
+vibemaxxer client -rules client.rules
+```
+
+Point applications at it, for example in another shell:
+
+```sh
+export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
+export https_proxy=$HTTPS_PROXY http_proxy=$HTTP_PROXY
+curl https://example.com
+```
+
+The domains above are placeholders; replace them with the domains you want to block. Applications must use the proxy for filtering to apply. `NO_PROXY` entries and applications that ignore proxy settings bypass vibemaxxer.
+
+For automatic startup around a command, see [On-demand commands](#on-demand-commands). For remote routing, configure an explicit `-upstream` and add `proxy` rules as described below.
 
 ## Rules
 
-Each mode reads its own rules file. One rule per line, `#` starts a comment.
+Each mode reads its own native rules file. One rule per line, `#` starts a comment. There are no downloaded blocklists or automatic updates.
 
 ```text
-# client.rules (home)
+# client.rules
 block .ads.example          # never connect
+block .telemetry.example
+# Optional: these rules require -upstream
 proxy .anthropic.com        # send through the server
 proxy api.openai.com
 # everything else: DIRECT
 ```
 
 ```text
-# server.rules (VM)
+# server.rules (optional remote server)
 allow .anthropic.com        # ports default to 443
 allow api.openai.com 443
 allow .internal.example 80,443
@@ -46,9 +66,9 @@ deny  admin.internal.example
 - `allow` checks the destination port as well. `proxy` rules ignore the port; the server decides.
 - Names are matched case-insensitively, without a trailing dot. Only ASCII names are accepted; write international names in punycode (`xn--…`).
 - IP-literal destinations are refused in both modes. Applications must use hostnames.
-- Files are validated at startup; any error stops the process. Restart to apply changes. Existing tunnels keep running until they close.
+- Files are validated at startup; any error stops the process. A client rules file containing `proxy` rules requires an explicit `-upstream`, even if a `block` rule shadows them. Restart to apply changes. Existing tunnels keep running until they close.
 
-The two policies are independent: the server never trusts the client's decision, and the client never falls back to DIRECT when the server or tunnel fails.
+When remote routing is enabled, the two policies are independent: the server never trusts the client's decision, and the client never falls back to DIRECT when the server or tunnel fails. Blocked domains are not resolved or contacted.
 
 ## Commands
 
@@ -57,7 +77,9 @@ vibemaxxer client -rules client.rules [-listen 127.0.0.1:8080] [-upstream 127.0.
 vibemaxxer server -rules server.rules [-listen 127.0.0.1:8081] [-allow-private]
 ```
 
-`-listen` and `-upstream` must be loopback addresses. `-upstream` is the local end of the SSH forward.
+`-listen` and, when supplied, `-upstream` must be loopback IP addresses with a nonzero port. `-listen` defaults to the addresses shown above. **There is no default upstream**: omit `-upstream` for local filtering, or set it to the local end of the SSH forward to enable `proxy` rules. Merely supplying `-upstream` does not route unmatched traffic remotely.
+
+**Existing remote deployments:** add `-upstream 127.0.0.1:18080` to the client command; the previous implicit upstream is no longer used.
 
 Destinations are checked after DNS resolution, on the address actually dialed. Loopback, link-local (including `169.254.169.254`), multicast, `0.0.0.0/8` and the AWS IPv6 metadata range `fd00:ec2::/32` are always refused. Private, CGNAT and the host's own interface networks (read at startup) are refused unless `-allow-private` is set (for example, to reach private VPC services from the server).
 
@@ -78,9 +100,51 @@ Once a tunnel is up, failures close it; nothing is replayed. Fixed limits: 32 Ki
 
 Each request logs one line with method, host, port, action, rule (`file:line` or `default`), status, duration and error. Paths, queries, headers and payloads are never logged.
 
-## Deployment
+## On-demand commands
 
-The example uses a public coordinator `frp.example.net`, a VM running sshd, and a home machine. Pin your frp and OpenSSH versions and check the options against them.
+`vibemaxxer-run [--remote] [--] COMMAND [ARG...]` (installed next to the binary) runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
+
+By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started.
+
+```ini
+# ~/.config/systemd/user/vibemaxxer.target
+[Unit]
+StopWhenUnneeded=yes
+Wants=vibemaxxer-client.service
+
+# ~/.config/systemd/user/vibemaxxer-client.service
+[Unit]
+PartOf=vibemaxxer.target
+StopWhenUnneeded=yes
+[Service]
+ExecStart=/usr/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.rules
+Restart=on-failure
+```
+
+Adjust the binary paths, create your client rules file, run `systemctl --user daemon-reload`, and do not enable the units. Then:
+
+```sh
+vibemaxxer-run curl https://example.com
+vibemaxxer-run claude
+codex() { vibemaxxer-run codex "$@"; }
+```
+
+For optional remote routing, configure the client with `-upstream` and install the [remote on-demand services](#remote-on-demand-services), then use `vibemaxxer-run --remote COMMAND [ARG...]`. That mode additionally starts the remote target and waits for the SSH forward on `127.0.0.1:18080`. The flag starts infrastructure; it does not change the client's rules or flags.
+
+## Optional remote deployment
+
+Skip this section for standalone filtering. The example uses a public coordinator `frp.example.net`, a VM running sshd, and a home machine. Proxied names are never resolved at home; the server resolves them, so names that only exist on the VM work.
+
+vibemaxxer decides per hostname and forwards HTTP. The remote connection is handled by existing tools:
+
+| Concern | Tool |
+| --- | --- |
+| NAT traversal, rendezvous, no relay | [frp](https://gofrp.org) XTCP (`frps` on a public host, `frpc` on both ends) |
+| Encryption, peer authentication, key management | OpenSSH local forward to a restricted account |
+| Routing by domain, destination policy, egress | vibemaxxer `client` (home) and `server` (VM) |
+| Process supervision | systemd or your service manager |
+
+Pin your frp and OpenSSH versions and check the options against them.
 
 ### Coordinator
 
@@ -181,21 +245,21 @@ Host vm-proxy-tunnel
     ServerAliveCountMax 3
 ```
 
-Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working. frpc honors `HTTP_PROXY`, so never start it from a shell where the proxy variables point at vibemaxxer.
+Supervise `frpc`, `ssh -N vm-proxy-tunnel` (restart on exit) and `vibemaxxer client -rules ~/.config/vibemaxxer/client.rules -upstream 127.0.0.1:18080` separately. A lost tunnel only affects PROXY requests; DIRECT keeps working. frpc honors `HTTP_PROXY`, so never start it from a shell where the proxy variables point at vibemaxxer.
 
-### On demand
+### Remote on-demand services
 
-`vibemaxxer-run COMMAND [ARG...]` (installed next to the binary) runs a command with the proxy variables set, starting the home side only while something needs it. It starts the systemd user unit `vibemaxxer.target`, waits up to 20 s for the client on `127.0.0.1:8080` and the forward on `127.0.0.1:18080`, then runs the command in its own scope. Concurrent commands share one tunnel; it stops when the last one and its subprocesses exit. If the tunnel does not come up, the command is not started.
+In addition to the local units above, install these units. Add `-upstream 127.0.0.1:18080` to the client's `ExecStart` when its rules contain `proxy` entries.
 
 ```ini
-# ~/.config/systemd/user/vibemaxxer.target
+# ~/.config/systemd/user/vibemaxxer-remote.target
 [Unit]
 StopWhenUnneeded=yes
-Wants=vibemaxxer-frpc.service vibemaxxer-ssh.service vibemaxxer-client.service
+Wants=vibemaxxer.target vibemaxxer-frpc.service vibemaxxer-ssh.service
 
 # ~/.config/systemd/user/vibemaxxer-frpc.service
 [Unit]
-PartOf=vibemaxxer.target
+PartOf=vibemaxxer-remote.target
 StopWhenUnneeded=yes
 [Service]
 ExecStart=/usr/bin/frpc -c %h/.config/vibemaxxer/frpc.toml
@@ -204,7 +268,7 @@ RestartSec=1
 
 # ~/.config/systemd/user/vibemaxxer-ssh.service
 [Unit]
-PartOf=vibemaxxer.target
+PartOf=vibemaxxer-remote.target
 StopWhenUnneeded=yes
 After=vibemaxxer-frpc.service
 StartLimitIntervalSec=0
@@ -212,24 +276,20 @@ StartLimitIntervalSec=0
 ExecStart=/usr/bin/ssh -N vm-proxy-tunnel
 Restart=always
 RestartSec=1
-
-# ~/.config/systemd/user/vibemaxxer-client.service
-[Unit]
-PartOf=vibemaxxer.target
-StopWhenUnneeded=yes
-[Service]
-ExecStart=/usr/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.rules
-Restart=on-failure
 ```
 
-Adjust the binary paths, run `systemctl --user daemon-reload`, and do not enable the units. Then:
+Adjust binary paths, run `systemctl --user daemon-reload`, and do not enable the units. Use:
 
 ```sh
-vibemaxxer-run claude
-codex() { vibemaxxer-run codex "$@"; }
+vibemaxxer-run --remote claude
+codex() { vibemaxxer-run --remote codex "$@"; }
 ```
 
-### Applications
+Concurrent remote commands share the tunnel; it stops when the last remote command and its subprocesses exit. Local-only commands can keep the client running without keeping the tunnel up. A command started without `--remote` can still use DIRECT and BLOCK rules, but requests matching `proxy` rules fail if the tunnel is down.
+
+If migrating older on-demand units, remove the frpc/SSH dependencies from `vibemaxxer.target`, move those services' `PartOf` to `vibemaxxer-remote.target`, and use `--remote` for commands that need the tunnel.
+
+## Applications
 
 Point applications at the client, or start them with `vibemaxxer-run`:
 
@@ -248,7 +308,7 @@ curl https://api.ipify.org     # exits from home or the VM depending on the rule
 ## Security
 
 - Any local process can use the loopback listeners. The server's rules bound what a compromised one can reach through the VM.
-- SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads. A compromised or impersonated coordinator can break rendezvous, not read or redirect the tunnel; pinning its certificate also keeps the frp token from leaking to an impostor.
+- When remote routing is enabled, SSH authenticates both ends and encrypts the hop. frps and the STUN server see addresses and timing, never payloads. A compromised or impersonated coordinator can break rendezvous, not read or redirect the tunnel; pinning its certificate also keeps the frp token from leaking to an impostor.
 - An `allow` rule authorizes a host and port, not every URL or service behind it.
 
 ## Build and test
@@ -268,6 +328,7 @@ nix flake check    # includes the end-to-end test below; needs KVM
 
 `nix/e2e.nix` boots three QEMU VMs (coordinator, home, VM) with public test addresses and no inbound access to home or the VM. It runs frps with an RFC 5780 STUN server, frpc XTCP without fallback, the restricted sshd account and both vibemaxxer modes. It checks:
 
+- Standalone HTTP and HTTPS filtering with no upstream configured and SSH/frp stopped on the client.
 - DIRECT and PROXY egress addresses, and names that resolve only on the VM.
 - Client blocks and server denials, including port mismatches, rebinding to loopback and IP literals.
 - Log redaction.

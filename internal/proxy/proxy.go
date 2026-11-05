@@ -40,15 +40,21 @@ type Proxy struct {
 	idle     time.Duration
 }
 
-func New(name string, rules *policy.Policy, upstream string, dial DialFunc, logger *slog.Logger) *Proxy {
-	return &Proxy{name: name, policy: rules, upstream: upstream, dial: dial, logger: logger,
+func New(name string, rules *policy.Policy, upstream string, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
+	if upstream == "" && rules.RequiresUpstream() {
+		return nil, errors.New("proxy rules require -upstream; configure an upstream or remove the proxy rules")
+	}
+	p := &Proxy{name: name, policy: rules, upstream: upstream, dial: dial, logger: logger,
 		slots: make(chan struct{}, maxActive), idle: idleTimeout,
-		direct: &http.Transport{DialContext: dial, IdleConnTimeout: time.Minute},
-		proxied: &http.Transport{
+		direct: &http.Transport{DialContext: dial, IdleConnTimeout: time.Minute}}
+	if upstream != "" {
+		p.proxied = &http.Transport{
 			Proxy:           http.ProxyURL(&url.URL{Scheme: "http", Host: upstream}),
 			DialContext:     (&net.Dialer{Timeout: upstreamTimeout}).DialContext,
 			IdleConnTimeout: time.Minute,
-		}}
+		}
+	}
+	return p, nil
 }
 
 func (p *Proxy) Server() *http.Server {

@@ -156,6 +156,10 @@ func (r rule) matches(host string) bool {
 	return host == r.domain || r.subtree && strings.HasSuffix(host, "."+r.domain)
 }
 
+func (p *Policy) RequiresUpstream() bool {
+	return slices.ContainsFunc(p.rules, func(r rule) bool { return r.action == Proxy })
+}
+
 func (p *Policy) Decide(host string, port int) (Action, string) {
 	match := -1
 	for i, r := range p.rules {

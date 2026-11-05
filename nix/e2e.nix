@@ -68,6 +68,10 @@ let
       ${extra}
     '';
 
+  standaloneRules = pkgs.writeText "filter.rules" ''
+    block .blocked.example
+  '';
+
   clientRules = pkgs.writeText "client.rules" ''
     block .blocked.example
     proxy .proxied.example
@@ -214,7 +218,8 @@ in
         bindPort = 2222
       ''}";
       systemd.services.ssh-tunnel = service "SSH forward to the AWS vibemaxxer server" "${pkgs.openssh}/bin/ssh -N aws-proxy-tunnel";
-      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client -rules ${clientRules}";
+      systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client -rules ${standaloneRules} -listen 127.0.0.1:8082";
+      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client -rules ${clientRules} -upstream 127.0.0.1:18080";
     };
   };
 
@@ -223,6 +228,7 @@ in
 
     HOME, AWS = "${ip.home}", "${ip.aws}"
     CURL = "curl -sS --max-time 60 -x http://127.0.0.1:8080 --cacert ${secrets}/tls.crt"
+    LOCAL_CURL = CURL.replace(":8080", ":8082")
     SSH = ("ssh -F /dev/null -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes "
            "-o ConnectTimeout=30 -o HostKeyAlias=aws-vm-proxy -i /etc/vibemaxxer/id_ed25519 ")
     TARGET = " proxy-tunnel@127.0.0.1"
@@ -233,11 +239,11 @@ in
         "ip6tables ACTION OUTPUT -p udp",
     ]
 
-    def egress(url):
-        return home.succeed(f"{CURL} {url}").split()[0]
+    def egress(url, curl=CURL):
+        return home.succeed(f"{curl} {url}").split()[0]
 
-    def refused(url, status, proxy_status):
-        out = home.fail(f"{CURL} -fv -o /dev/null {url} 2>&1")
+    def refused(url, status, proxy_status, curl=CURL):
+        out = home.fail(f"{curl} -fv -o /dev/null {url} 2>&1")
         assert f" {status} " in out, out
         assert f"Proxy-Status: {proxy_status}" in out, out
 
@@ -249,6 +255,18 @@ in
     aws.wait_for_unit("sshd.service")
     aws.wait_for_unit("frpc.service")
     home.wait_for_unit("vibemaxxer-client.service")
+    home.wait_for_unit("vibemaxxer-filter.service")
+
+    with subtest("standalone filtering needs no upstream or tunnel"):
+        home.systemctl("stop ssh-tunnel.service frpc.service")
+        home.fail("ss -ltnH 'sport = 18080' | grep -q .")
+        assert egress("http://direct.example/", LOCAL_CURL) == HOME
+        assert egress("https://direct.example/", LOCAL_CURL) == HOME
+        refused("http://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
+        refused("https://x.blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
+        coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
+
+    home.systemctl("start frpc.service ssh-tunnel.service")
     home.wait_for_unit("ssh-tunnel.service")
 
     with subtest("the AWS VM accepts no inbound connections"):

@@ -15,10 +15,11 @@ import (
 
 const usage = `Usage: vibemaxxer COMMAND [flags]
 
-  client   HTTP proxy for applications; routes each domain direct, via the server, or blocks it
-  server   HTTP proxy behind the SSH forward; enforces its own allowlist and egresses
+  client   Local HTTP proxy for applications; blocks domains and forwards other traffic directly
+  server   Optional remote HTTP proxy; enforces its own allowlist and egresses
 
-Typical chain: app → client 127.0.0.1:8080 → ssh -L 18080 → server 127.0.0.1:8081 → internet.
+Local filtering: vibemaxxer client -rules client.rules
+Remote routing: add -upstream 127.0.0.1:18080 and proxy rules to send selected domains via the server.
 Use COMMAND -help for flags.`
 
 func Main(args []string) int {
@@ -56,7 +57,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	allowPrivate := flags.Bool("allow-private", false, "permit private and local-network destination addresses")
 	var upstream string
 	if mode == policy.Client {
-		flags.StringVar(&upstream, "upstream", "127.0.0.1:18080", "loopback IP:PORT of the SSH forward to the server")
+		flags.StringVar(&upstream, "upstream", "", "optional loopback IP:PORT of the SSH forward to the server (required by proxy rules)")
 	}
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -67,7 +68,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err := loopback("-listen", *listen); err != nil {
 		return err
 	}
-	if mode == policy.Client {
+	if upstream != "" {
 		if err := loopback("-upstream", upstream); err != nil {
 			return err
 		}
@@ -83,12 +84,16 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
+	p, err := proxy.New("vibemaxxer-"+name, pol, upstream, dial, logger)
+	if err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
 	}
 	logger.Info("listening", "mode", name, "address", listener.Addr(), "rules", *rules, "upstream", upstream, "allow_private", *allowPrivate)
-	return proxy.New("vibemaxxer-"+name, pol, upstream, dial, logger).Server().Serve(listener)
+	return p.Server().Serve(listener)
 }
 
 func loopback(flagName, value string) error {
