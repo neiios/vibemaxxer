@@ -19,7 +19,7 @@ const usage = `vibemaxxer blocks, passes or reroutes HTTP traffic by hostname.
 Usage: vibemaxxer COMMAND [OPTION...]
 
 Commands:
-  client   run the proxy your apps connect to
+  client   run the proxy that programs connect to
   server   run the proxy on the machine traffic should leave from
   run      run a command through the proxy
   key      print this machine's key fingerprint
@@ -63,7 +63,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	listen := flags.String("listen", defaultListen, "address to listen on")
 	rules := flags.String("rules", "", "rules file (required)")
-	allowPrivate := flags.Bool("allow-private", false, "allow destinations on private networks")
+	allowPrivate := flags.Bool("allow-private", false, "also allow private, CGNAT and local network destinations")
 	var lan lanOptions
 	lan.flags(flags, mode)
 	var upstream string

@@ -57,7 +57,7 @@ func (o *lanOptions) validate(mode policy.Mode, upstream string, keySet bool) er
 				return fmt.Errorf("--server: %w", err)
 			}
 			if addr, err := netip.ParseAddr(host); err == nil && (addr.Unmap().IsUnspecified() || addr.Unmap().IsMulticast()) {
-				return errors.New("--server must name a concrete unicast destination")
+				return errors.New("--server must not be a wildcard or multicast address")
 			}
 			pin, err := identity.ParseFingerprint(o.serverKey)
 			if err != nil {
@@ -96,7 +96,7 @@ func (o *lanOptions) config(mode policy.Mode) (*tls.Config, error) {
 func lanListen(value string) error {
 	addr, err := netip.ParseAddrPort(value)
 	if err != nil || addr.Port() == 0 || !(addr.Addr().Unmap().IsGlobalUnicast() || addr.Addr().Unmap().IsLoopback()) {
-		return errors.New("--listen must be a concrete unicast IP:PORT for LAN TLS (wildcards are refused)")
+		return errors.New("--listen must be a specific IP:PORT with --tls, not a wildcard such as 0.0.0.0")
 	}
 	return nil
 }
@@ -104,7 +104,7 @@ func lanListen(value string) error {
 func keyCommand(args []string) error {
 	flags := flag.NewFlagSet("key", flag.ContinueOnError)
 	path := flags.String("key", identity.DefaultKeyPath(), "identity file")
-	if err := parseOptions(flags, "Usage: vibemaxxer key [--key FILE]\n\nPrints this machine's fingerprint, creating the key if needed.", args); err != nil {
+	if err := parseOptions(flags, "Usage: vibemaxxer key [--key FILE]\n\nPrints this machine's key fingerprint. Creates the key first if it\ndoesn't exist.", args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {

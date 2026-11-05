@@ -1,7 +1,7 @@
 # Claude Code, local filtering
 
-This blocks Claude Code's Datadog telemetry. Everything else, Claude's API
-included, goes out over your own connection.
+This example blocks Claude Code's Datadog telemetry and nothing else. Claude's
+API traffic goes out over your own connection.
 
 ## Setup
 
@@ -22,24 +22,12 @@ with `ExecStart` pointing at `%h/.local/bin/vibemaxxer`.
 examples/claude-local/bin/claude
 ```
 
-The wrapper runs `~/.local/bin/claude` through `vibemaxxer run`. You can
-change both paths with `CLAUDE_REAL_BINARY` and `VIBEMAXXER_BINARY`. It also:
+The wrapper runs `~/.local/bin/claude` through `vibemaxxer run`. Set
+`CLAUDE_REAL_BINARY` or `VIBEMAXXER_BINARY` if your binaries live somewhere
+else. It also turns off Claude's telemetry, error reporting and background
+tasks. And if `CLAUDE_CODE_OAUTH_TOKEN` isn't set but `oo7-cli` is installed,
+it reads the token from the `service=claude-code account=oauth-token` entry.
 
-- turns off Claude's telemetry, error reporting and background tasks
-- sets `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`, so read up on
-  that before you use it
-- reads `CLAUDE_CODE_OAUTH_TOKEN` from `oo7-cli`
-  (`service=claude-code account=oauth-token`) if it's installed and the
-  variable is unset
-
-## Without systemd
-
-```sh
-vibemaxxer client --rules examples/claude-local/client.rules
-```
-
-and in another terminal:
-
-```sh
-HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 ~/.local/bin/claude
-```
+If you don't use systemd, run `vibemaxxer client` with this `client.rules`
+and set the proxy variables like in the
+[quick start](../../README.md#quick-start).

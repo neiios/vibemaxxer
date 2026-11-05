@@ -1,7 +1,7 @@
 # Rules
 
-The client and the server each read their own rules file. Each line holds one
-rule, and `#` starts a comment.
+The client and the server each have their own rules file. One rule per line,
+and `#` starts a comment.
 
 ```text
 # client.rules
@@ -20,48 +20,41 @@ deny  admin.internal.example
 # anything else is denied
 ```
 
-## Matching
+## How matching works
 
 - `example.com` matches only that name. `.example.com` matches it and every
   subdomain, but not `badexample.com`. `*` matches everything.
-- `block` and `deny` always win, wherever they appear. Otherwise the first
-  matching `proxy` or `allow` applies.
-- `allow` checks the port too. `proxy` ignores it and leaves that to the
-  server.
-- Matching ignores case and a trailing dot. Names must be ASCII, so write
+- A matching `block` or `deny` rule always applies, wherever it is in the
+  file. Otherwise the first matching `proxy` or `allow` rule applies.
+- `allow` checks the port too. Leave the port list off and it allows 443
+  only. `proxy` doesn't look at the port, since the server does that.
+- Matching ignores case and a trailing dot. Names have to be ASCII, so write
   international domains in punycode (`xn--...`).
 
-A bad rules file stops the process at startup. Restart to pick up changes.
-Open tunnels keep running until they close. A client with `proxy` rules
-refuses to start until you give it `--upstream` or `--server`.
+vibemaxxer only reads the rules when it starts, so restart it after you change
+them. If there's a mistake in the file, it tells you the line and exits. And a
+client with `proxy` rules won't start until you give it `--upstream` or
+`--server`.
 
-## What gets refused anyway
+## What's always refused
 
-Both modes refuse IP-literal destinations, so apps have to use hostnames.
+Both sides refuse IP literals, so programs have to connect by hostname.
 
-Hostnames are checked again after DNS, against the address actually dialed.
-That address can never be loopback, link-local (including cloud metadata),
-multicast, `0.0.0.0/8` or `fd00:ec2::/32`. Private, CGNAT and the machine's
-own networks are also refused unless you pass `--allow-private`, which is handy
-on a server that has to reach private services.
+After DNS, vibemaxxer checks the address it's about to dial. It always refuses
+loopback, link-local, multicast, `0.0.0.0/8` and `fd00:ec2::/32`. That covers
+the cloud metadata addresses, `169.254.169.254` and AWS's `fd00:ec2::254`.
 
-Proxied names are resolved on the server, never on the client. Blocked names
-are never resolved at all.
+It also refuses private ranges, CGNAT and the machine's own networks, unless
+you pass `--allow-private`. That's useful on a server that has to reach
+internal services.
 
-## Responses
+## Responses and logs
 
 Every refusal comes with an [RFC 9209](https://www.rfc-editor.org/rfc/rfc9209)
-`Proxy-Status` header that says which side refused and why:
+`Proxy-Status` header that says which side refused and why. Connections to a
+destination time out after 10 seconds, and connections to the upstream after
+30. When 128 connections are already open, new ones get a 503.
 
-| Status | Meaning |
-| --- | --- |
-| 400 | Malformed request |
-| 403 | Blocked, denied, or a forbidden address |
-| 502 | DNS failure or unreachable destination/upstream |
-| 503 | Too many connections (128 at once) |
-| 504 | Timed out (10 s to the destination, 30 s to the upstream) |
-
-Once a tunnel is open, any failure just closes it. Nothing is retried.
-
-Each request writes one log line with the host, port, action, matching rule,
-status and duration. Paths, headers and bodies are never logged.
+Each request gets one log line: method, host, port, action, the rule that
+matched, status and duration. Paths, headers and bodies never show up in the
+log.

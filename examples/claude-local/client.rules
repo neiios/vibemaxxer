@@ -1,6 +1,3 @@
-# Block Claude Code's Datadog telemetry intake (including all subdomains).
+# Block Claude Code's Datadog telemetry intake and its subdomains.
 block .http-intake.logs.us5.datadoghq.com
 block .browser-intake-us5-datadoghq.com
-
-# Everything else, including Claude services, connects directly.
-# No proxy rules or upstream server are needed.

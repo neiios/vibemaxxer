@@ -35,7 +35,7 @@
     remove-references-to -t ${tzdata} -t ${iana-etc} -t ${mailcap} $out/bin/vibemaxxer
   '';
   meta = {
-    description = "Local HTTP/HTTPS filtering proxy with optional domain-based remote routing";
+    description = "HTTP proxy that blocks, passes or reroutes traffic by hostname";
     homepage = "https://github.com/neiios/vibemaxxer";
     license = lib.licenses.gpl3Plus;
     mainProgram = "vibemaxxer";

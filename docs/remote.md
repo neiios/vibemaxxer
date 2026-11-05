@@ -1,28 +1,27 @@
 # SSH and frp setup
 
-Use this when the client and server are on different networks, say a laptop
-at home and a VM somewhere else. vibemaxxer doesn't handle any of the
-networking here. It relies on tools that already do it well:
+This is for when the client and server are on different networks, like a
+laptop at home and a VM in the cloud. vibemaxxer doesn't do any of this
+networking itself. The client talks to the server through an SSH forward, and
+[frp](https://gofrp.org) XTCP gets that SSH connection through NAT with UDP
+hole punching, so neither side has to accept inbound connections. A public
+coordinator, frps, only helps the two sides find each other. It never relays
+traffic.
 
-- **OpenSSH** encrypts the hop and authenticates both ends.
-- **[frp](https://gofrp.org) XTCP** punches through NAT, so neither side has
-  to accept inbound connections. A small public coordinator helps the two
-  sides find each other but never relays traffic.
-
-If the VM's SSH port is reachable directly, skip frp and SSH to it directly.
+If you can reach the VM's SSH port directly, you don't need frp at all. Skip
+the frp parts and put the VM's real address in the SSH config below.
 
 ```text
 app -> client :8080 -> ssh forward :18080 === frp xtcp ===> sshd -> server :8081 -> internet
 ```
 
-The examples below use `frp.example.net` as the coordinator. Pin your frp and
-OpenSSH versions, and check these options against them.
+The examples below use `frp.example.net` as the coordinator.
 
 ## Coordinator
 
-frps can't be trusted much: frpc doesn't check its certificate by default,
-and the login token can be replayed. So give it a fixed certificate and pin
-that on both sides:
+Don't trust frps more than you have to. Out of the box frpc doesn't verify the
+frps certificate, and anyone who sees the login token can replay it. So give
+frps a fixed certificate and have both frpc instances trust only that one:
 
 ```sh
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
@@ -39,16 +38,17 @@ transport.tls.certFile = "/etc/frp/frps.crt"
 transport.tls.keyFile = "/etc/frp/frps.key"
 ```
 
-Copy `frps.crt` (not the key) to both machines. Open only `bindPort` in the
-firewall, because anyone with the token can ask frps to bind ports. Running
-frps without `CAP_NET_BIND_SERVICE` and with `IPAddressDeny=localhost` also
-keeps it away from localhost services if it ever gets compromised.
+Copy `frps.crt` to both machines. `frps.key` stays on the coordinator. Only
+open `bindPort` in the firewall, since anyone with the token can ask frps to
+open more.
 
 frp needs a STUN server that supports RFC 5780. Google's and Cloudflare's
-don't. `stun.nextcloud.com:3478` does. You can test one with
+don't, `stun.nextcloud.com:3478` does. You can check one with
 `frpc nathole discover --nat_hole_stun_server HOST:PORT`.
 
 ## VM
+
+Configure frpc to expose the VM's SSH port through the coordinator:
 
 ```toml
 # frpc.toml
@@ -66,8 +66,9 @@ localIP = "127.0.0.1"
 localPort = 22
 ```
 
-Create a `proxy-tunnel` user, authorize your home key for it, and lock it down
-so the only thing it can do is reach the vibemaxxer server:
+Then create a `proxy-tunnel` user, add your home machine's public key to its
+`authorized_keys`, and restrict the account in `/etc/ssh/sshd_config` so it
+can only forward to the vibemaxxer server:
 
 ```sshconfig
 Match User proxy-tunnel
@@ -83,11 +84,13 @@ Match User proxy-tunnel
     PermitTunnel no
 ```
 
-Check it with `sshd -t` and `sshd -T -C user=proxy-tunnel`, and keep an admin
-session open while you do. Then run these two under systemd:
-`vibemaxxer server --rules /etc/vibemaxxer/server.rules` and `frpc`.
+Check it with `sshd -t` and `sshd -T -C user=proxy-tunnel`, then reload sshd.
+Finally, run `vibemaxxer server --rules /etc/vibemaxxer/server.rules` and
+`frpc` as systemd services.
 
 ## Home
+
+Configure frpc to bring the VM's SSH port to `127.0.0.1:2222`:
 
 ```toml
 # frpc.toml
@@ -104,11 +107,14 @@ serverName = "vm-ssh"
 secretKey = "XTCP_SECRET"
 bindAddr = "127.0.0.1"
 bindPort = 2222
-# no fallbackTo: if hole punching fails, requests fail instead of relaying
+# Leave fallbackTo unset so requests fail instead of relaying through frps
 ```
 
-Add the VM's real host key to `known_hosts` under the alias `vm-proxy`. Get it
-from somewhere you trust, never by accepting it over the tunnel. Then add:
+Add the VM's host key to `~/.ssh/known_hosts` under the name `vm-proxy`. Get
+it from somewhere you trust, like the VM's console, and never by accepting it
+over the tunnel. With the host key pinned, a bad coordinator can stop you from
+connecting, but it can't read or redirect anything. Then add this to
+`~/.ssh/config`:
 
 ```sshconfig
 Host vm-proxy-tunnel
@@ -126,21 +132,21 @@ Host vm-proxy-tunnel
     ServerAliveCountMax 3
 ```
 
-Now run `frpc`, `ssh -N vm-proxy-tunnel` and the client:
+Now start `frpc`, `ssh -N vm-proxy-tunnel` and the client:
 
 ```sh
 vibemaxxer client --rules client.rules --upstream 127.0.0.1:18080
 ```
 
-If the tunnel drops, only proxied requests fail and direct traffic keeps
-working. Don't start frpc from a shell with the proxy variables set, because
-it honors them.
+If the tunnel drops, proxied requests fail and direct traffic keeps working.
+Don't start frpc from a shell that has the proxy variables set, or it'll send
+its own traffic through vibemaxxer.
 
 ## On demand
 
-To have `vibemaxxer run --remote` bring the tunnel up and down for you, set up
-the units from [vibemaxxer run](run.md), add `--upstream 127.0.0.1:18080` to
-the client's `ExecStart`, and add:
+If you want `vibemaxxer run --remote` to bring the tunnel up and down for you,
+set up the units from [vibemaxxer run](run.md), add `--upstream
+127.0.0.1:18080` to the client's `ExecStart`, and create these three units:
 
 ```ini
 # ~/.config/systemd/user/vibemaxxer-remote.target
@@ -175,18 +181,12 @@ Restart=always
 RestartSec=1
 ```
 
+Then run things with `--remote`:
+
 ```sh
 vibemaxxer run --remote claude
 ```
 
-The tunnel stays up while any `--remote` command is running. Commands run
-without `--remote` still share the client, but their proxied requests fail
-if the tunnel happens to be down.
-
-## What each side can see
-
-SSH encrypts everything between home and the VM. The coordinator and the
-STUN server see addresses and timing, never contents. A malicious
-coordinator can break the rendezvous, but it can't read or redirect the
-tunnel. And because the server enforces its own `allow` rules, a compromised
-local process can only reach what you've allowed.
+The tunnel stays up as long as any `--remote` command is running. Commands
+started without `--remote` still share the client, but their proxied requests
+fail while the tunnel is down.

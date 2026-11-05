@@ -1,72 +1,70 @@
 # vibemaxxer
 
-A tiny HTTP proxy that decides what to do with each hostname: block it, let it
-through, or send it out through another machine.
+vibemaxxer is a small HTTP proxy that looks at the hostname of each connection
+and either blocks it, lets it through, or sends it out through another machine
+you control.
 
-It's good for keeping coding agents from phoning home, or for making their API
-traffic leave from a machine you choose. It works with anything that respects
-`HTTPS_PROXY`.
+It's meant for coding agents like Claude Code and Codex. With it you can stop
+them from sending telemetry, and make their API traffic leave from a machine
+you choose. Anything that honors `HTTPS_PROXY` and `HTTP_PROXY` works with it.
 
-```text
-app -> vibemaxxer client -> internet                          (direct)
-                         -> 403                               (block)
-                         -> vibemaxxer server -> internet     (proxy)
-```
-
-It's one static Go binary with no dependencies outside the standard library.
-TLS is never intercepted. Filtering works on hostnames only, never on paths
-or content.
+vibemaxxer never decrypts TLS, and rules only ever match hostnames and ports,
+not paths or content.
 
 ## Quick start
 
-Write a `client.rules`:
+Write a `client.rules` file:
 
 ```text
 block .ads.example
 block .telemetry.example
 ```
 
-Start the proxy and point something at it:
+Start the proxy:
 
 ```sh
 vibemaxxer client --rules client.rules
+```
 
+Then, in another terminal, set the proxy variables and run something through
+it:
+
+```sh
 export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
 curl https://example.com
 ```
 
-Blocked hosts get a 403 and everything else goes straight out. That's the
-whole thing.
+Blocked hosts get a 403 and everything else connects directly.
+[Rules](docs/rules.md) has the full syntax, and [vibemaxxer run](docs/run.md)
+shows how to start the proxy only when a command needs it.
 
 ## Routing through another machine
 
-Add `proxy` rules and tell the client where the server is. Traffic for those
-hosts then leaves from the server's network instead of yours. The server
-checks its own allowlist and doesn't trust the client's decisions. If the
-server can't be reached, those requests fail rather than going out directly.
+Add `proxy` rules for the hosts you want to reroute, and tell the client where
+the server is. Traffic for those hosts then leaves from the server's network
+instead of yours.
 
-There are two ways to connect the client and server:
+The server has its own `allow` rules and doesn't trust the client, so a
+compromised process on your machine can only reach what the server allows. If
+the server is unreachable, proxied requests fail. They never quietly fall back
+to a direct connection.
 
-- **[LAN](docs/lan.md)**: built-in mutual TLS with pinned keys, for two
-  machines that can reach each other directly.
-- **[SSH](docs/remote.md)**: an SSH forward, optionally over frp for NAT
-  traversal, for machines on different networks.
+There are two ways to connect the two:
 
-## Docs
-
-- [Rules](docs/rules.md): syntax, matching, and what gets refused
-- [vibemaxxer run](docs/run.md): start the proxy on demand around a command
-- [LAN setup](docs/lan.md)
-- [SSH and frp setup](docs/remote.md)
+- If the machines can reach each other directly, use the built-in mutual TLS
+  with pinned keys. See [LAN setup](docs/lan.md).
+- If they're on different networks, use an SSH forward, optionally through
+  frp to get past NAT. See [SSH and frp setup](docs/remote.md).
 
 The [examples](examples/) run Claude Code through vibemaxxer in each mode:
-[local](examples/claude-local/), [LAN](examples/claude-lan/), and
+[local](examples/claude-local/), [LAN](examples/claude-lan/) and
 [remote](examples/claude-remote/).
 
 ## Caveats
 
-This isn't a sandbox. Apps that ignore proxy variables, or hosts listed in
-`NO_PROXY`, skip vibemaxxer entirely. Any local process can use the proxy.
+vibemaxxer isn't a sandbox. A program that ignores the proxy variables
+bypasses it, and so does anything in `NO_PROXY`. The proxy also doesn't
+authenticate local clients, so any process on the machine can use it.
 
 ## Building
 
@@ -75,10 +73,9 @@ nix build                  # or:
 CGO_ENABLED=0 go build -trimpath -o vibemaxxer ./cmd/vibemaxxer
 ```
 
-`go test -race ./...` runs the unit tests. `nix flake check` also boots a
-three-VM end-to-end test (needs KVM) that covers every mode, including NAT
-traversal and failure cases.
+`go test -race ./...` runs the unit tests. `nix flake check` also runs an
+end-to-end test across three VMs, which needs KVM.
 
 ## License
 
-[GPL-3.0-or-later](LICENSE)
+GPL-3.0-or-later. See [LICENSE](LICENSE).

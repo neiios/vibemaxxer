@@ -1,10 +1,8 @@
-# Block Claude Code's Datadog telemetry intake (including all subdomains).
+# Block Claude Code's Datadog telemetry intake and its subdomains.
 block .http-intake.logs.us5.datadoghq.com
 block .browser-intake-us5-datadoghq.com
 
-# Claude services use the LAN server (including all subdomains).
+# Send Anthropic and Claude domains and their subdomains through the LAN server.
 proxy .anthropic.com
 proxy .claude.ai
 proxy .claude.com
-
-# Everything else connects directly.

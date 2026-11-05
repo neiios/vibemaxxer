@@ -17,7 +17,8 @@ const runnerUsage = "usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]"
 const runnerHelp = `Usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]
 
 Starts the proxy, runs COMMAND through it, and stops the proxy when
-the last command exits. Needs the systemd user units from the docs.
+the last command exits. It needs the systemd user units described in
+docs/run.md.
 
 Options:
   --remote     also start the SSH tunnel

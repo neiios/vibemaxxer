@@ -1,13 +1,13 @@
 # Claude Code via a remote VM
 
-This blocks Claude Code's telemetry and sends Claude's API traffic through a
-VM over SSH. Everything else goes out directly. The server only allows
-Claude's domains on port 443.
+This example blocks Claude Code's telemetry and sends traffic for Anthropic
+and Claude domains through a VM over SSH. Everything else goes out directly.
+The server allows only those domains, and only on port 443.
 
 ## Setup
 
 1. Follow [SSH and frp setup](../../docs/remote.md), including the
-   [on-demand units](../../docs/remote.md#on-demand). Use this example's
+   [on-demand units](../../docs/remote.md#on-demand), and use this example's
    `server.rules` on the VM.
 2. On your machine, from the repo root:
 
@@ -29,21 +29,12 @@ Claude's domains on port 443.
 examples/claude-remote/bin/claude
 ```
 
-This brings up the tunnel and runs Claude. When the last session exits, the
-tunnel goes down again. If the tunnel is down, Claude's API requests fail
-instead of going out directly. Otherwise the wrapper behaves the same as in
-the [local example](../claude-local/#run).
+The wrapper brings the tunnel up and then starts Claude. When the last Claude
+session exits, systemd takes the tunnel down again. If the tunnel is down,
+Claude's API requests fail rather than going out directly. Otherwise it's the
+same wrapper as in the [local example](../claude-local/#run).
 
-## Without systemd
-
-With the tunnel up:
-
-```sh
-vibemaxxer client --rules examples/claude-remote/client.rules --upstream 127.0.0.1:18080
-```
-
-and in another terminal:
-
-```sh
-HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 ~/.local/bin/claude
-```
+If you don't use systemd, bring the tunnel up yourself, run
+`vibemaxxer client` with this `client.rules` and `--upstream 127.0.0.1:18080`,
+and set the proxy variables like in the
+[quick start](../../README.md#quick-start).

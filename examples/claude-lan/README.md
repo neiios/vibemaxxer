@@ -1,12 +1,13 @@
 # Claude Code via a LAN machine
 
-This blocks Claude Code's telemetry and sends Claude's API traffic through
-another machine on your network. Everything else goes out directly. The
-server only allows Claude's domains on port 443.
+This example blocks Claude Code's telemetry and sends traffic for Anthropic
+and Claude domains through another machine on your network. Everything else
+goes out directly. The server allows only those domains, and only on port
+443.
 
-See [LAN setup](../../docs/lan.md) for how the TLS pinning works.
+[LAN setup](../../docs/lan.md) explains how the key pinning works.
 
-## Both machines
+## On both machines
 
 From the repo root:
 
@@ -16,9 +17,9 @@ go build -o ~/.local/bin/vibemaxxer ./cmd/vibemaxxer
 ~/.local/bin/vibemaxxer key
 ```
 
-Swap the printed fingerprints.
+Give each machine's fingerprint to the other.
 
-## Server
+## On the server
 
 ```sh
 install -m644 examples/claude-lan/server.rules ~/.config/vibemaxxer/
@@ -26,39 +27,30 @@ vibemaxxer server --tls --listen 192.168.1.50:8443 \
   --client-key WORKSTATION_FINGERPRINT --rules ~/.config/vibemaxxer/server.rules
 ```
 
-Use the machine's real LAN address, and keep it running under your service
-manager.
+Replace `192.168.1.50` with the server's LAN address, and run this under your
+service manager.
 
-## Workstation
+## On your workstation
 
 ```sh
 install -m644 examples/claude-lan/client.rules ~/.config/vibemaxxer/
 ```
 
-Create the systemd units from [vibemaxxer run](../../docs/run.md), using this
+Create the systemd units from [vibemaxxer run](../../docs/run.md) with this
 `ExecStart`:
 
 ```ini
 ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT
 ```
 
-Then:
+Then start Claude through the wrapper:
 
 ```sh
 examples/claude-lan/bin/claude
 ```
 
-The wrapper behaves the same as in the [local example](../claude-local/#run).
+It's the same wrapper as in the [local example](../claude-local/#run).
 
-## Without systemd
-
-```sh
-vibemaxxer client --rules examples/claude-lan/client.rules \
-  --server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT
-```
-
-and in another terminal:
-
-```sh
-HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 ~/.local/bin/claude
-```
+If you don't use systemd, run `vibemaxxer client` with this `client.rules`
+and the same `--server` and `--server-key` options, and set the proxy
+variables like in the [quick start](../../README.md#quick-start).
