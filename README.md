@@ -16,7 +16,7 @@ Three deployment options share the same routing rules:
 | LAN TLS | Built-in TLS 1.3 with pinned Ed25519 identities | Two computers on the same network |
 | SSH/frp remote | SSH forward, optionally over frp XTCP | Home computer and a remote VM on different networks |
 
-LAN TLS restores the old pinned-TLS architecture without replacing the current SSH/frp option. It needs a reachable server; it does not perform NAT traversal. See the [LAN example](examples/claude-lan/) and [LAN setup](#lan-remote-deployment).
+LAN TLS needs a directly reachable server; it does not perform NAT traversal. See the [LAN example](examples/claude-lan/) and [LAN setup](#lan-remote-deployment).
 
 Standalone filtering needs only `vibemaxxer client` and a rules file. No remote server, SSH, frp, or systemd is required. Both `client` and the optional `server` are standard HTTP/1.1 forward proxies: `CONNECT host:port` for HTTPS and absolute-form requests for plain HTTP. TLS stays end to end; nothing is intercepted. Filtering is by hostname, not URL path or page content.
 
@@ -95,8 +95,6 @@ Client listeners, plaintext server listeners, and `-upstream` must be loopback I
 
 **There is no default upstream**: omit both `-upstream` and `-server` for local filtering. Choose `-upstream` for an SSH forward or `-server HOST:PORT -server-key PIN` for LAN TLS; they are mutually exclusive. Supplying either transport does not route unmatched traffic remotely. `-key` is only used with LAN TLS.
 
-**Existing remote deployments:** add `-upstream 127.0.0.1:18080` to the client command; the previous implicit upstream is no longer used.
-
 Destinations are checked after DNS resolution, on the address actually dialed. Loopback, link-local (including `169.254.169.254`), multicast, `0.0.0.0/8` and the AWS IPv6 metadata range `fd00:ec2::/32` are always refused. Private, CGNAT and the host's own interface networks (read at startup) are refused unless `-allow-private` is set (for example, to reach private VPC services from the server).
 
 ### Responses
@@ -163,8 +161,7 @@ vibemaxxer key
 ```
 
 Exchange fingerprints over a trusted channel. Identities are stored at
-`~/.config/vibemaxxer/identity.pem`; `-key FILE` overrides the path. Existing
-Ed25519 identity files from the old architecture are compatible. Keep the PEM
+`~/.config/vibemaxxer/identity.pem`; `-key FILE` overrides the path. Keep the PEM
 private; fingerprints are public. Certificates are self-signed, and peer public
 keys are pinned instead of relying on a CA or hostname certificate.
 
@@ -375,8 +372,6 @@ codex() { vibemaxxer run --remote codex "$@"; }
 ```
 
 Concurrent remote commands share the tunnel; it stops when the last remote command and its subprocesses exit. Local-only commands can keep the client running without keeping the tunnel up. A command started without `--remote` can still use DIRECT and BLOCK rules, but requests matching `proxy` rules fail if the tunnel is down.
-
-If migrating older on-demand units, remove the frpc/SSH dependencies from `vibemaxxer.target`, move those services' `PartOf` to `vibemaxxer-remote.target`, and use `--remote` for commands that need the tunnel.
 
 ## Applications
 

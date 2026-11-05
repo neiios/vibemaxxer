@@ -1,11 +1,10 @@
 # Claude Code with remote routing
 
-This example uses the current `vibemaxxer client` / `server` commands and
+Run Claude Code through a local vibemaxxer client that sends Claude services to a
+remote `vibemaxxer server` over an SSH forward, started on demand with
 `vibemaxxer run --remote`. SSH provides transport encryption and peer
-authentication; this example does not use vibemaxxer identity pins. For direct
-pinned-TLS connections between LAN hosts, use [claude-lan](../claude-lan/).
-The old runner's `run -server`, `-blocklist`, and `-proxy-domains` flags are not
-used; LAN TLS transport options belong to the `client` and `server` commands.
+authentication. For direct pinned-TLS connections between LAN hosts, use
+[claude-lan](../claude-lan/).
 
 - `client.rules` blocks Claude Code's Datadog telemetry intake, routes Claude
   services (`anthropic.com`, `claude.ai`, `claude.com`) through the remote server,
@@ -81,9 +80,6 @@ examples/claude-remote/bin/claude
 The wrapper expects the real Claude executable at `$HOME/.local/bin/claude`.
 Set `CLAUDE_REAL_BINARY` to override it; it must not point to the wrapper.
 Set `VIBEMAXXER_BINARY` to override `$HOME/.local/bin/vibemaxxer`.
-The old `VIBEMAXXER_SERVER`, `VIBEMAXXER_SERVER_KEY`, `VIBEMAXXER_BLOCKLIST`, and
-`VIBEMAXXER_PROXY_DOMAINS` variables are no longer used: configure the tunnel and
-rules instead.
 
 If `CLAUDE_CODE_OAUTH_TOKEN` is unset and `oo7-cli` is installed, the wrapper
 reads it from `service=claude-code account=oauth-token`; otherwise Claude Code

@@ -17,7 +17,7 @@ checks the policy and resolves proxied destination hostnames.
 
 ## Install and exchange fingerprints
 
-Install the current binary on both computers, for example from the repository:
+Install vibemaxxer on both computers, for example from the repository:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
@@ -26,8 +26,7 @@ go build -o "$HOME/.local/bin/vibemaxxer" ./cmd/vibemaxxer
 ```
 
 `key` creates `~/.config/vibemaxxer/identity.pem` if absent and prints its public
-fingerprint. Existing Ed25519 identities from the old architecture work too.
-Exchange fingerprints using a trusted channel; do not exchange private PEM files.
+fingerprint. Exchange fingerprints using a trusted channel; do not exchange private PEM files.
 Use `-key FILE` consistently if you want a separate identity.
 
 ## Egress machine
