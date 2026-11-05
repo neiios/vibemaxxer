@@ -33,13 +33,13 @@ type lanOptions struct {
 }
 
 func (o *lanOptions) flags(flags *flag.FlagSet, mode policy.Mode) {
-	flags.StringVar(&o.key, "key", identity.DefaultKeyPath(), "Ed25519 identity file for LAN TLS (created if absent)")
+	flags.StringVar(&o.key, "key", identity.DefaultKeyPath(), "identity file for LAN TLS")
 	if mode == policy.Client {
-		flags.StringVar(&o.server, "server", "", "LAN TLS server HOST:PORT (alternative to -upstream)")
-		flags.StringVar(&o.serverKey, "server-key", "", "pinned LAN server fingerprint (required with -server)")
+		flags.StringVar(&o.server, "server", "", "send proxied traffic to this LAN server")
+		flags.StringVar(&o.serverKey, "server-key", "", "fingerprint of the LAN server")
 	} else {
-		flags.BoolVar(&o.tls, "tls", false, "serve mutually authenticated TLS for LAN clients")
-		flags.Var(&o.clients, "client-key", "allowed LAN client fingerprint (repeatable; requires -tls)")
+		flags.BoolVar(&o.tls, "tls", false, "accept LAN clients over TLS")
+		flags.Var(&o.clients, "client-key", "fingerprint of an allowed LAN client (repeatable)")
 	}
 }
 
@@ -47,30 +47,30 @@ func (o *lanOptions) validate(mode policy.Mode, upstream string, keySet bool) er
 	if mode == policy.Client {
 		if o.server != "" {
 			if upstream != "" {
-				return errors.New("-server (LAN TLS) and -upstream (SSH) are mutually exclusive")
+				return errors.New("--server (LAN TLS) and --upstream (SSH) are mutually exclusive")
 			}
 			host, port, err := net.SplitHostPort(o.server)
 			if err != nil || host == "" {
-				return errors.New("-server must be HOST:PORT")
+				return errors.New("--server must be HOST:PORT")
 			}
 			if _, err := policy.Port(port); err != nil {
-				return fmt.Errorf("-server: %w", err)
+				return fmt.Errorf("--server: %w", err)
 			}
 			if addr, err := netip.ParseAddr(host); err == nil && (addr.Unmap().IsUnspecified() || addr.Unmap().IsMulticast()) {
-				return errors.New("-server must name a concrete unicast destination")
+				return errors.New("--server must name a concrete unicast destination")
 			}
 			pin, err := identity.ParseFingerprint(o.serverKey)
 			if err != nil {
-				return fmt.Errorf("-server-key is required with -server: %w", err)
+				return fmt.Errorf("--server-key is required with --server: %w", err)
 			}
 			o.serverKey = pin
 		} else if o.serverKey != "" || keySet {
-			return errors.New("-server-key and -key require -server")
+			return errors.New("--server-key and --key require --server")
 		}
 	} else if !o.tls && (len(o.clients) != 0 || keySet) {
-		return errors.New("-client-key and -key require -tls")
+		return errors.New("--client-key and --key require --tls")
 	} else if o.tls && len(o.clients) == 0 {
-		return errors.New("-tls requires at least one -client-key")
+		return errors.New("--tls requires at least one --client-key")
 	}
 	return nil
 }
@@ -96,19 +96,19 @@ func (o *lanOptions) config(mode policy.Mode) (*tls.Config, error) {
 func lanListen(value string) error {
 	addr, err := netip.ParseAddrPort(value)
 	if err != nil || addr.Port() == 0 || !(addr.Addr().Unmap().IsGlobalUnicast() || addr.Addr().Unmap().IsLoopback()) {
-		return errors.New("-listen must be a concrete unicast IP:PORT for LAN TLS (wildcards are refused)")
+		return errors.New("--listen must be a concrete unicast IP:PORT for LAN TLS (wildcards are refused)")
 	}
 	return nil
 }
 
 func keyCommand(args []string) error {
 	flags := flag.NewFlagSet("key", flag.ContinueOnError)
-	path := flags.String("key", identity.DefaultKeyPath(), "Ed25519 identity file (created if absent)")
-	if err := flags.Parse(args); err != nil {
+	path := flags.String("key", identity.DefaultKeyPath(), "identity file")
+	if err := parseOptions(flags, "Usage: vibemaxxer key [--key FILE]\n\nPrints this machine's fingerprint, creating the key if needed.", args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected argument; use key -help")
+		return errors.New("unexpected argument; see vibemaxxer key --help")
 	}
 	id, err := identity.Load(*path)
 	if err != nil {

@@ -30,15 +30,15 @@ func TestLANStartup(t *testing.T) {
 	for _, mode := range []string{"client", "server"} {
 		rules := filepath.Join(dir, mode+".rules")
 		text := "proxy .remote.test\n"
-		options := []string{"-server", "192.0.2.1:8443", "-server-key", strings.ToUpper(id.Fingerprint())}
+		options := []string{"--server", "192.0.2.1:8443", "--server-key", strings.ToUpper(id.Fingerprint())}
 		if mode == "server" {
 			text = "allow .remote.test\n"
-			options = []string{"-tls", "-client-key", id.Fingerprint(), "-client-key", id.Fingerprint()}
+			options = []string{"--tls", "--client-key", id.Fingerprint(), "--client-key", id.Fingerprint()}
 		}
 		if err := os.WriteFile(rules, []byte(text), 0600); err != nil {
 			t.Fatal(err)
 		}
-		args := append([]string{mode, "-key", key, "-rules", rules, "-listen", listener.Addr().String()}, options...)
+		args := append([]string{mode, "--key", key, "--rules", rules, "--listen", listener.Addr().String()}, options...)
 		if err := Run(logger, args); !errors.Is(err, syscall.EADDRINUSE) {
 			t.Fatalf("valid LAN configuration did not reach listen: %v", err)
 		}
@@ -60,28 +60,28 @@ func TestLANFlagPolicy(t *testing.T) {
 		mode string
 		opts []string
 	}{
-		{"client", []string{"-server", "192.0.2.1:8443"}},
-		{"client", []string{"-server-key", pin}},
-		{"client", []string{"-server", "192.0.2.1:8443", "-server-key", "bad"}},
-		{"client", []string{"-server", "192.0.2.1:8443", "-server-key", pin, "-upstream", "127.0.0.1:18080"}},
-		{"client", []string{"-server", "192.0.2.1", "-server-key", pin}},
-		{"client", []string{"-server", ":8443", "-server-key", pin}},
-		{"client", []string{"-server", "192.0.2.1:0", "-server-key", pin}},
-		{"client", []string{"-server", "0.0.0.0:8443", "-server-key", pin}},
-		{"client", []string{"-server", "192.0.2.1:8443", "-server-key", pin, "-listen", "192.0.2.2:8080"}},
-		{"client", []string{"-key", key}},
-		{"server", []string{"-tls"}},
-		{"server", []string{"-client-key", pin}},
-		{"server", []string{"-tls", "-client-key", "bad"}},
-		{"server", []string{"-tls", "-client-key", pin, "-listen", "0.0.0.0:8443"}},
-		{"server", []string{"-tls", "-client-key", pin, "-listen", "[::]:8443"}},
-		{"server", []string{"-key", key}},
+		{"client", []string{"--server", "192.0.2.1:8443"}},
+		{"client", []string{"--server-key", pin}},
+		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", "bad"}},
+		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--upstream", "127.0.0.1:18080"}},
+		{"client", []string{"--server", "192.0.2.1", "--server-key", pin}},
+		{"client", []string{"--server", ":8443", "--server-key", pin}},
+		{"client", []string{"--server", "192.0.2.1:0", "--server-key", pin}},
+		{"client", []string{"--server", "0.0.0.0:8443", "--server-key", pin}},
+		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--listen", "192.0.2.2:8080"}},
+		{"client", []string{"--key", key}},
+		{"server", []string{"--tls"}},
+		{"server", []string{"--client-key", pin}},
+		{"server", []string{"--tls", "--client-key", "bad"}},
+		{"server", []string{"--tls", "--client-key", pin, "--listen", "0.0.0.0:8443"}},
+		{"server", []string{"--tls", "--client-key", pin, "--listen", "[::]:8443"}},
+		{"server", []string{"--key", key}},
 	} {
 		rules := clientRules
 		if tc.mode == "server" {
 			rules = serverRules
 		}
-		args := append([]string{tc.mode, "-rules", rules}, tc.opts...)
+		args := append([]string{tc.mode, "--rules", rules}, tc.opts...)
 		if err := Run(slog.New(slog.DiscardHandler), args); err == nil {
 			t.Errorf("accepted %v", args)
 		}

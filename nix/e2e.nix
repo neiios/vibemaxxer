@@ -168,7 +168,7 @@ in
         group = "proxy-tunnel";
         openssh.authorizedKeys.keyFiles = [ "${secrets}/home.pub" ];
       };
-      systemd.services.vibemaxxer-server = service "vibemaxxer server" "${package}/bin/vibemaxxer server -rules ${serverRules}";
+      systemd.services.vibemaxxer-server = service "vibemaxxer server" "${package}/bin/vibemaxxer server --rules ${serverRules}";
       systemd.services.frpc = service "frp agent exposing sshd over XTCP" "${pkgs.frp}/bin/frpc -c ${frpc ''
         [[proxies]]
         name = "aws-ssh"
@@ -218,8 +218,8 @@ in
         bindPort = 2222
       ''}";
       systemd.services.ssh-tunnel = service "SSH forward to the AWS vibemaxxer server" "${pkgs.openssh}/bin/ssh -N aws-proxy-tunnel";
-      systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client -rules ${standaloneRules} -listen 127.0.0.1:8082";
-      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client -rules ${clientRules} -upstream 127.0.0.1:18080";
+      systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${standaloneRules} --listen 127.0.0.1:8082";
+      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${clientRules} --upstream 127.0.0.1:18080";
     };
   };
 
@@ -337,14 +337,14 @@ in
         aws.systemctl("stop frpc.service")
         aws.succeed("iptables -I INPUT -s ${ip.home} -p tcp --dport 8443 -j ACCEPT")
         binary = "${package}/bin/vibemaxxer"
-        home_pin = home.succeed(f"{binary} key -key /tmp/home-lan.pem").strip()
-        aws_pin = aws.succeed(f"{binary} key -key /tmp/aws-lan.pem").strip()
-        aws.succeed(f"systemd-run --unit=vibemaxxer-lan-server {binary} server -tls "
-                    f"-listen {AWS}:8443 -key /tmp/aws-lan.pem -client-key {home_pin} -rules ${serverRules}")
+        home_pin = home.succeed(f"{binary} key --key /tmp/home-lan.pem").strip()
+        aws_pin = aws.succeed(f"{binary} key --key /tmp/aws-lan.pem").strip()
+        aws.succeed(f"systemd-run --unit=vibemaxxer-lan-server {binary} server --tls "
+                    f"--listen {AWS}:8443 --key /tmp/aws-lan.pem --client-key {home_pin} --rules ${serverRules}")
         aws.wait_for_unit("vibemaxxer-lan-server.service")
         home.succeed(f"systemd-run --unit=vibemaxxer-lan-client {binary} client "
-                     f"-listen 127.0.0.1:8083 -key /tmp/home-lan.pem -server {AWS}:8443 "
-                     f"-server-key {aws_pin} -rules ${clientRules}")
+                     f"--listen 127.0.0.1:8083 --key /tmp/home-lan.pem --server {AWS}:8443 "
+                     f"--server-key {aws_pin} --rules ${clientRules}")
         home.wait_for_open_port(8083)
         LAN_CURL = CURL.replace(":8080", ":8083")
         home.fail("getent hosts proxied.example")
@@ -359,8 +359,8 @@ in
         for name, key, pin in [("bad-pin", "/tmp/home-lan.pem", "0" * 64),
                                ("unknown-client", "/tmp/unknown-lan.pem", aws_pin)]:
             home.succeed(f"systemd-run --unit=vibemaxxer-lan-{name} {binary} client "
-                         f"-listen 127.0.0.1:8084 -key {key} -server {AWS}:8443 "
-                         f"-server-key {pin} -rules ${clientRules}")
+                         f"--listen 127.0.0.1:8084 --key {key} --server {AWS}:8443 "
+                         f"--server-key {pin} --rules ${clientRules}")
             home.wait_for_open_port(8084)
             bad_curl = CURL.replace(":8080", ":8084")
             refused("https://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", bad_curl)

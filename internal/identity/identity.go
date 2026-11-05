@@ -34,7 +34,7 @@ func DefaultKeyPath() string {
 
 func Load(path string) (*Identity, error) {
 	if path == "" {
-		return nil, errors.New("cannot determine the configuration directory; pass -key FILE")
+		return nil, errors.New("cannot determine the configuration directory; pass --key FILE")
 	}
 	key, err := readKey(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -174,7 +174,7 @@ func (id *Identity) ClientTLS(serverKey string) *tls.Config {
 				return err
 			}
 			if subtle.ConstantTimeCompare([]byte(key), []byte(serverKey)) != 1 {
-				return fmt.Errorf("server identity %s does not match -server-key", key)
+				return fmt.Errorf("server identity %s does not match --server-key", key)
 			}
 			return nil
 		},
@@ -193,7 +193,7 @@ func (id *Identity) ServerTLS(clients map[string]bool) *tls.Config {
 				return err
 			}
 			if !clients[key] {
-				return fmt.Errorf("unknown client %s; add -client-key %s and restart", key, key)
+				return fmt.Errorf("unknown client %s; add --client-key %s and restart", key, key)
 			}
 			return nil
 		},

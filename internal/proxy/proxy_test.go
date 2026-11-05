@@ -253,7 +253,7 @@ func TestProxyRulesRequireUpstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, err := New("vibemaxxer-client", rules, "", nil, slog.New(slog.DiscardHandler))
-	if err == nil || !strings.Contains(err.Error(), "proxy rules require -upstream") || p != nil {
+	if err == nil || !strings.Contains(err.Error(), "proxy rules require --upstream") || p != nil {
 		t.Fatalf("New without upstream = %v, %v", p, err)
 	}
 }

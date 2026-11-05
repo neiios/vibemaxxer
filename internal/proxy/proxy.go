@@ -55,7 +55,7 @@ func NewTLS(name string, rules *policy.Policy, upstream string, config *tls.Conf
 
 func newProxy(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
 	if upstream == "" && rules.RequiresUpstream() {
-		return nil, errors.New("proxy rules require -upstream (SSH) or -server and -server-key (LAN TLS)")
+		return nil, errors.New("proxy rules require --upstream (SSH) or --server and --server-key (LAN TLS)")
 	}
 	p := &Proxy{name: name, policy: rules, upstream: upstream, dial: dial, logger: logger,
 		slots: make(chan struct{}, maxActive), idle: idleTimeout,

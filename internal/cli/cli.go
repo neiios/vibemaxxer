@@ -14,18 +14,18 @@ import (
 	"github.com/neiios/vibemaxxer/internal/proxy"
 )
 
-const usage = `Usage: vibemaxxer COMMAND [flags]
+const usage = `vibemaxxer blocks, passes or reroutes HTTP traffic by hostname.
 
-  client   Local HTTP proxy for applications; blocks domains and forwards other traffic directly
-  server   Optional remote HTTP proxy; enforces its own allowlist and egresses
-  run      Run a command with on-demand filtering (--remote also starts the SSH tunnel)
-  key      Print/create this machine's Ed25519 LAN TLS identity fingerprint
+Usage: vibemaxxer COMMAND [OPTION...]
 
-Local filtering: vibemaxxer client -rules client.rules
-SSH remote routing: client -upstream 127.0.0.1:18080 plus proxy rules.
-LAN remote routing: client -server HOST:PORT -server-key PIN plus proxy rules;
-                    server -tls -client-key PIN -listen LAN_IP:PORT.
-Use COMMAND -help for flags.`
+Commands:
+  client   run the proxy your apps connect to
+  server   run the proxy on the machine traffic should leave from
+  run      run a command through the proxy
+  key      print this machine's key fingerprint
+
+Run 'vibemaxxer COMMAND --help' to see its options.
+Docs: https://github.com/neiios/vibemaxxer`
 
 func Main(args []string) int {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -61,27 +61,27 @@ func Run(logger *slog.Logger, args []string) error {
 
 func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen string, args []string) error {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	listen := flags.String("listen", defaultListen, "IP:PORT to accept proxy requests on (loopback unless server -tls)")
+	listen := flags.String("listen", defaultListen, "address to listen on")
 	rules := flags.String("rules", "", "rules file (required)")
-	allowPrivate := flags.Bool("allow-private", false, "permit private and local-network destination addresses")
+	allowPrivate := flags.Bool("allow-private", false, "allow destinations on private networks")
 	var lan lanOptions
 	lan.flags(flags, mode)
 	var upstream string
 	if mode == policy.Client {
-		flags.StringVar(&upstream, "upstream", "", "loopback IP:PORT of the SSH forward (alternative to -server for proxy rules)")
+		flags.StringVar(&upstream, "upstream", "", "send proxied traffic to this SSH forward")
 	}
-	if err := flags.Parse(args); err != nil {
+	if err := parseOptions(flags, "Usage: vibemaxxer "+name+" --rules FILE [OPTION...]", args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return fmt.Errorf("unexpected argument %q; see -help", flags.Arg(0))
+		return fmt.Errorf("unexpected argument %q; see vibemaxxer %s --help", flags.Arg(0), name)
 	}
 	keySet := false
 	flags.Visit(func(f *flag.Flag) { keySet = keySet || f.Name == "key" })
 	if err := lan.validate(mode, upstream, keySet); err != nil {
 		return err
 	}
-	validateListen := func(value string) error { return loopback("-listen", value) }
+	validateListen := func(value string) error { return loopback("--listen", value) }
 	if lan.tls {
 		validateListen = lanListen
 	}
@@ -89,12 +89,12 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 		return err
 	}
 	if upstream != "" {
-		if err := loopback("-upstream", upstream); err != nil {
+		if err := loopback("--upstream", upstream); err != nil {
 			return err
 		}
 	}
 	if *rules == "" {
-		return errors.New("-rules is required")
+		return errors.New("--rules is required")
 	}
 	pol, err := policy.Load(*rules, mode)
 	if err != nil {

@@ -14,6 +14,15 @@ import (
 
 const runnerUsage = "usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]"
 
+const runnerHelp = `Usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]
+
+Starts the proxy, runs COMMAND through it, and stops the proxy when
+the last command exits. Needs the systemd user units from the docs.
+
+Options:
+  --remote     also start the SSH tunnel
+  -h, --help   show this help`
+
 func runCommand(args []string) error {
 	remote := false
 parse:
@@ -25,8 +34,8 @@ parse:
 		case "--":
 			args = args[1:]
 			break parse
-		case "-h", "--help", "-help":
-			fmt.Fprintln(os.Stdout, runnerUsage)
+		case "-h", "-help", "--help":
+			fmt.Fprintln(os.Stdout, runnerHelp)
 			return flag.ErrHelp
 		default:
 			if strings.HasPrefix(args[0], "-") {
