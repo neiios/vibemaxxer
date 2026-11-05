@@ -335,7 +335,6 @@ in
     with subtest("LAN TLS works without SSH or frp"):
         home.systemctl("stop ssh-tunnel.service frpc.service")
         aws.systemctl("stop frpc.service")
-        # Simulate a reachable LAN service while keeping the SSH port firewalled.
         aws.succeed("iptables -I INPUT -s ${ip.home} -p tcp --dport 8443 -j ACCEPT")
         binary = "${package}/bin/vibemaxxer"
         home_pin = home.succeed(f"{binary} key -key /tmp/home-lan.pem").strip()

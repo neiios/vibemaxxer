@@ -188,7 +188,6 @@ func TestLANAuthenticationFailsClosed(t *testing.T) {
 	if got := c.serverDNS.log(); len(got) != 0 {
 		t.Fatalf("unauthenticated request reached destination: %v", got)
 	}
-	// No implicit plaintext downgrade to an unencrypted upstream.
 	plain := newChain(t)
 	_, address := plain.tlsClient(t, clientID.ClientTLS(serverID.Fingerprint()))
 	_, _, resp := connect(t, address, "proxied.test:443", "")

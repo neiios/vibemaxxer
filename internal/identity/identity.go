@@ -164,9 +164,8 @@ func peerFingerprint(state tls.ConnectionState) (string, error) {
 
 func (id *Identity) ClientTLS(serverKey string) *tls.Config {
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{id.cert},
-		// Identity pins replace CA/hostname verification; VerifyConnection is mandatory.
+		MinVersion:         tls.VersionTLS13,
+		Certificates:       []tls.Certificate{id.cert},
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"http/1.1"},
 		VerifyConnection: func(state tls.ConnectionState) error {

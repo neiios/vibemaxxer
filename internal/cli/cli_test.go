@@ -25,7 +25,6 @@ func TestClientWithoutUpstream(t *testing.T) {
 			t.Fatal(err)
 		}
 		args := append([]string{"client", "-rules", rules, "-listen", listener.Addr().String()}, upstream...)
-		// An occupied listener lets us check startup validation without running a server.
 		if err := Run(logger, args); !errors.Is(err, syscall.EADDRINUSE) {
 			t.Fatalf("%v: want listener error after valid configuration, got %v", args, err)
 		}

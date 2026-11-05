@@ -46,8 +46,6 @@ func New(name string, rules *policy.Policy, upstream string, dial DialFunc, logg
 	return newProxy(name, rules, upstream, nil, dial, logger)
 }
 
-// NewTLS uses an authenticated TLS connection to the upstream instead of a
-// loopback SSH forward. Only the upstream hop uses this config, never origins.
 func NewTLS(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
 	if config == nil || upstream == "" {
 		return nil, errors.New("TLS upstream requires an address and TLS configuration")

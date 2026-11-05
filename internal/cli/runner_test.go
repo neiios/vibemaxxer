@@ -57,7 +57,6 @@ func runnerListener(t *testing.T, address string) *net.TCPListener {
 }
 
 func TestRunnerModes(t *testing.T) {
-	// Readiness checks only need a TCP listener, not an HTTP server or tunnel.
 	runnerListener(t, "127.0.0.1:8080")
 	upstream := runnerListener(t, "127.0.0.1:18080")
 	for _, remote := range []bool{false, true} {

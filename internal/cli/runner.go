@@ -96,7 +96,6 @@ func waitForProxy(remote bool, attempts int, delay time.Duration) error {
 	return errors.New("proxy is not up; see journalctl --user -u vibemaxxer-client")
 }
 
-// Replace the process so signals, terminal access, and exit status are preserved.
 func execCommand(args, env []string) error {
 	path, err := exec.LookPath(args[0])
 	if err != nil {
