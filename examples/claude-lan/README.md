@@ -1,127 +1,64 @@
-# Claude Code through a LAN machine
+# Claude Code via a LAN machine
 
-Use this instead of `claude-remote` when the computers can reach each other
-directly. The client connects to the egress machine over built-in, mutually
-authenticated TLS 1.3. No SSH, frp, or public coordinator is needed.
+This blocks Claude Code's telemetry and sends Claude's API traffic through
+another machine on your network. Everything else goes out directly. The
+server only allows Claude's domains on port 443.
 
-```text
-Claude -> client 127.0.0.1:8080 -> BLOCK: 403
-                              -> DIRECT: local internet
-                              -> PROXY: pinned TLS -> LAN server -> internet/VPN
-```
+See [LAN setup](../../docs/lan.md) for how the TLS pinning works.
 
-The native rules match the remote example: block Claude Code's telemetry intake, route
-Claude services through the LAN server, and connect directly for everything
-else. The server permits only those Claude services on port 443. It independently
-checks the policy and resolves proxied destination hostnames.
+## Both machines
 
-## Install and exchange fingerprints
-
-Install vibemaxxer on both computers, for example from the repository:
+From the repo root:
 
 ```sh
-mkdir -p "$HOME/.local/bin"
-go build -o "$HOME/.local/bin/vibemaxxer" ./cmd/vibemaxxer
-"$HOME/.local/bin/vibemaxxer" key
+mkdir -p ~/.local/bin ~/.config/vibemaxxer
+go build -o ~/.local/bin/vibemaxxer ./cmd/vibemaxxer
+~/.local/bin/vibemaxxer key
 ```
 
-`key` creates `~/.config/vibemaxxer/identity.pem` if absent and prints its public
-fingerprint. Exchange fingerprints using a trusted channel; do not exchange private PEM files.
-Use `-key FILE` consistently if you want a separate identity.
+Swap the printed fingerprints.
 
-## Egress machine
-
-Copy `server.rules` to `~/.config/vibemaxxer/server.rules`, then run:
+## Server
 
 ```sh
-"$HOME/.local/bin/vibemaxxer" server -tls \
-  -listen 192.168.1.50:8443 \
-  -client-key WORKSTATION_FINGERPRINT \
-  -rules "$HOME/.config/vibemaxxer/server.rules"
+install -m644 examples/claude-lan/server.rules ~/.config/vibemaxxer/
+vibemaxxer server --tls --listen 192.168.1.50:8443 \
+  --client-key WORKSTATION_FINGERPRINT --rules ~/.config/vibemaxxer/server.rules
 ```
 
-Replace the IP with this machine's LAN address. Permit that TCP port only from
-trusted LAN hosts in your firewall. Wildcard binds are refused. Repeat
-`-client-key` to allow more workstations. Supervise this process with your service
-manager; the workstation runner does not start the remote server.
-
-The server uses its normal routing. Configure a VPN and kill switch on that
-machine separately if desired; vibemaxxer does not manage them.
+Use the machine's real LAN address, and keep it running under your service
+manager.
 
 ## Workstation
 
-Install the client rules from the repository root:
-
 ```sh
-mkdir -p "$HOME/.config/vibemaxxer" "$HOME/.config/systemd/user"
-install -m644 examples/claude-lan/client.rules "$HOME/.config/vibemaxxer/client.rules"
+install -m644 examples/claude-lan/client.rules ~/.config/vibemaxxer/
 ```
 
-Create these systemd user units, substituting the egress machine's actual LAN
-address and fingerprint:
+Create the systemd units from [vibemaxxer run](../../docs/run.md), using this
+`ExecStart`:
 
 ```ini
-# ~/.config/systemd/user/vibemaxxer.target
-[Unit]
-StopWhenUnneeded=yes
-Wants=vibemaxxer-client.service
+ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT
 ```
 
-```ini
-# ~/.config/systemd/user/vibemaxxer-client.service
-[Unit]
-PartOf=vibemaxxer.target
-StopWhenUnneeded=yes
-[Service]
-ExecStart=%h/.local/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.rules -server 192.168.1.50:8443 -server-key EGRESS_MACHINE_FINGERPRINT
-Restart=on-failure
-```
-
-Run `systemctl --user daemon-reload`, but do not enable these units. The runner
-starts the local client on demand and stops it when the last wrapped command and
-its subprocesses exit. It does not start or check an SSH forward. Readiness only
-checks the local client listener; a request verifies the remote TLS identity.
-
-The local, LAN, and SSH examples share a client service and port. Select one
-configuration at a time and restart an already-running client after changing it.
-The service configuration selects transport and routing.
-
-## Run Claude
+Then:
 
 ```sh
 examples/claude-lan/bin/claude
 ```
 
-The wrapper uses `vibemaxxer run`. `VIBEMAXXER_BINARY` overrides the default
-`$HOME/.local/bin/vibemaxxer`, and `CLAUDE_REAL_BINARY` overrides the real Claude
-path (`$HOME/.local/bin/claude`). Do not point that variable at the wrapper.
-
-As in the other examples, Bash and `readlink` are required. If
-`CLAUDE_CODE_OAUTH_TOKEN` is unset and `oo7-cli` is installed, the wrapper reads
-it from `service=claude-code account=oauth-token`; otherwise Claude Code uses its
-own login. Help/version bypass proxy startup. The wrapper disables telemetry and
-background tasks and retains
-`CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`; review that setting before
-use.
+The wrapper behaves the same as in the [local example](../claude-local/#run).
 
 ## Without systemd
 
-Run the server as above. Start the client manually:
-
 ```sh
-vibemaxxer client -rules examples/claude-lan/client.rules \
-  -server 192.168.1.50:8443 -server-key EGRESS_MACHINE_FINGERPRINT
+vibemaxxer client --rules examples/claude-lan/client.rules \
+  --server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT
 ```
 
-Then run the real Claude executable with authentication already configured:
+and in another terminal:
 
 ```sh
-HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 \
-https_proxy=http://127.0.0.1:8080 http_proxy=http://127.0.0.1:8080 \
-  "$HOME/.local/bin/claude"
+HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080 ~/.local/bin/claude
 ```
-
-A wrong identity or unavailable LAN server never falls back to DIRECT or
-plaintext. Application HTTPS is not decrypted by either proxy. Applications
-that ignore proxy settings and `NO_PROXY` exclusions bypass routing and filtering;
-this is not a network sandbox.
