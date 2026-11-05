@@ -425,3 +425,7 @@ nix flake check    # includes the end-to-end test below; needs KVM
 - Log redaction.
 - Tunnel-account bypass attempts.
 - With peer UDP blocked, PROXY fails while DIRECT keeps working, then recovers when UDP returns.
+
+## License
+
+vibemaxxer is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. See [LICENSE](LICENSE).

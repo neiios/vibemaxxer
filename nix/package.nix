@@ -34,4 +34,11 @@
   postFixup = ''
     remove-references-to -t ${tzdata} -t ${iana-etc} -t ${mailcap} $out/bin/vibemaxxer
   '';
+  meta = {
+    description = "Local HTTP/HTTPS filtering proxy with optional domain-based remote routing";
+    homepage = "https://github.com/neiios/vibemaxxer";
+    license = lib.licenses.gpl3Plus;
+    mainProgram = "vibemaxxer";
+    platforms = lib.platforms.linux;
+  };
 }
