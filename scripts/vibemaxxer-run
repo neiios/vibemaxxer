@@ -1,49 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() { printf 'usage: vibemaxxer-run [--remote] [--] COMMAND [ARG...]\n'; }
-
-remote=false
-while (($#)); do
-    case $1 in
-        --remote) remote=true; shift ;;
-        --) shift; break ;;
-        -h|--help) usage; exit 0 ;;
-        -*) usage >&2; exit 2 ;;
-        *) break ;;
-    esac
-done
-if (($# == 0)); then
-    usage >&2
-    exit 2
-fi
-
-if [[ -z ${VIBEMAXXER_RUN_SCOPE:-} ]]; then
-    target=vibemaxxer.target
-    mode=()
-    if [[ $remote == true ]]; then
-        target=vibemaxxer-remote.target
-        mode=(--remote)
-    fi
-    export VIBEMAXXER_RUN_SCOPE=1
-    exec systemd-run --user --scope --quiet \
-        -p "Wants=$target" -p "After=$target" -- "$0" "${mode[@]}" -- "$@"
-fi
-unset VIBEMAXXER_RUN_SCOPE
-
-ready() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
-
-for _ in {1..100}; do
-    if ready 8080 && { [[ $remote == false ]] || ready 18080; }; then
-        export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
-        export https_proxy=$HTTPS_PROXY http_proxy=$HTTP_PROXY
-        exec "$@"
-    fi
-    sleep 0.2
-done
-if [[ $remote == true ]]; then
-    printf 'vibemaxxer: proxy or tunnel is not up; see journalctl --user -u "vibemaxxer-*"\n' >&2
-else
-    printf 'vibemaxxer: proxy is not up; see journalctl --user -u vibemaxxer-client\n' >&2
-fi
-exit 1
+# Compatibility entry point; new integrations should use `vibemaxxer run`.
+bindir=$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")
+exec "$bindir/vibemaxxer" run "$@"

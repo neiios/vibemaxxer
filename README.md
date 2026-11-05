@@ -75,6 +75,7 @@ When remote routing is enabled, the two policies are independent: the server nev
 ```sh
 vibemaxxer client -rules client.rules [-listen 127.0.0.1:8080] [-upstream 127.0.0.1:18080] [-allow-private]
 vibemaxxer server -rules server.rules [-listen 127.0.0.1:8081] [-allow-private]
+vibemaxxer run [--remote] [--] COMMAND [ARG...]
 ```
 
 `-listen` and, when supplied, `-upstream` must be loopback IP addresses with a nonzero port. `-listen` defaults to the addresses shown above. **There is no default upstream**: omit `-upstream` for local filtering, or set it to the local end of the SSH forward to enable `proxy` rules. Merely supplying `-upstream` does not route unmatched traffic remotely.
@@ -102,9 +103,9 @@ Each request logs one line with method, host, port, action, rule (`file:line` or
 
 ## On-demand commands
 
-`vibemaxxer-run [--remote] [--] COMMAND [ARG...]` (installed next to the binary) runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
+`vibemaxxer run [--remote] [--] COMMAND [ARG...]` runs a command with the proxy variables set. It requires a systemd user manager and the units below, but ordinary `vibemaxxer client` use does not.
 
-By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started.
+By default it starts only `vibemaxxer.target`, waits up to 20 s for the local client on `127.0.0.1:8080`, and runs the command in its own scope. No SSH forward or remote service is started or checked. Concurrent commands share the client; it stops when the last command and its subprocesses exit. If the client does not come up, the command is not started. Command arguments, terminal access, signals, and exit status are preserved. Use `--` to separate runner options from a command whose name begins with `-`. The old `vibemaxxer-run` script remains a compatibility shim; new integrations only need the binary.
 
 ```ini
 # ~/.config/systemd/user/vibemaxxer.target
@@ -124,12 +125,12 @@ Restart=on-failure
 Adjust the binary paths, create your client rules file, run `systemctl --user daemon-reload`, and do not enable the units. Then:
 
 ```sh
-vibemaxxer-run curl https://example.com
-vibemaxxer-run claude
-codex() { vibemaxxer-run codex "$@"; }
+vibemaxxer run curl https://example.com
+vibemaxxer run claude
+codex() { vibemaxxer run codex "$@"; }
 ```
 
-For optional remote routing, configure the client with `-upstream` and install the [remote on-demand services](#remote-on-demand-services), then use `vibemaxxer-run --remote COMMAND [ARG...]`. That mode additionally starts the remote target and waits for the SSH forward on `127.0.0.1:18080`. The flag starts infrastructure; it does not change the client's rules or flags.
+For optional remote routing, configure the client with `-upstream` and install the [remote on-demand services](#remote-on-demand-services), then use `vibemaxxer run --remote COMMAND [ARG...]`. That mode additionally starts the remote target and waits for the SSH forward on `127.0.0.1:18080`. The flag starts infrastructure; it does not change the client's rules or flags.
 
 ## Optional remote deployment
 
@@ -281,8 +282,8 @@ RestartSec=1
 Adjust binary paths, run `systemctl --user daemon-reload`, and do not enable the units. Use:
 
 ```sh
-vibemaxxer-run --remote claude
-codex() { vibemaxxer-run --remote codex "$@"; }
+vibemaxxer run --remote claude
+codex() { vibemaxxer run --remote codex "$@"; }
 ```
 
 Concurrent remote commands share the tunnel; it stops when the last remote command and its subprocesses exit. Local-only commands can keep the client running without keeping the tunnel up. A command started without `--remote` can still use DIRECT and BLOCK rules, but requests matching `proxy` rules fail if the tunnel is down.
@@ -291,7 +292,7 @@ If migrating older on-demand units, remove the frpc/SSH dependencies from `vibem
 
 ## Applications
 
-Point applications at the client, or start them with `vibemaxxer-run`:
+Point applications at the client, or start them with `vibemaxxer run`:
 
 ```sh
 export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080

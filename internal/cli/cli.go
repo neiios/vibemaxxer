@@ -17,6 +17,7 @@ const usage = `Usage: vibemaxxer COMMAND [flags]
 
   client   Local HTTP proxy for applications; blocks domains and forwards other traffic directly
   server   Optional remote HTTP proxy; enforces its own allowlist and egresses
+  run      Run a command with on-demand local filtering (or --remote routing)
 
 Local filtering: vibemaxxer client -rules client.rules
 Remote routing: add -upstream 127.0.0.1:18080 and proxy rules to send selected domains via the server.
@@ -38,6 +39,8 @@ func Run(logger *slog.Logger, args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "run":
+		return runCommand(args[1:])
 	case "client":
 		return run(logger, "client", policy.Client, "127.0.0.1:8080", args[1:])
 	case "server":

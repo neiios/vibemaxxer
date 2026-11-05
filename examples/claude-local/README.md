@@ -15,7 +15,6 @@ From the repository root, install the binaries and rules:
 ```sh
 mkdir -p "$HOME/.local/bin" "$HOME/.config/vibemaxxer"
 go build -o "$HOME/.local/bin/vibemaxxer" ./cmd/vibemaxxer
-install -m755 scripts/vibemaxxer-run "$HOME/.local/bin/vibemaxxer-run"
 install -m644 examples/claude-local/client.rules "$HOME/.config/vibemaxxer/client.rules"
 ```
 
@@ -38,7 +37,7 @@ ExecStart=%h/.local/bin/vibemaxxer client -rules %h/.config/vibemaxxer/client.ru
 Restart=on-failure
 ```
 
-Run `systemctl --user daemon-reload`. Do not enable the units: `vibemaxxer-run`
+Run `systemctl --user daemon-reload`. Do not enable the units: `vibemaxxer run`
 starts them on demand and they stop after the last wrapped command exits.
 If you already use these units for remote routing, remove `-upstream` and replace
 any `proxy` rules before using this local-only configuration.
@@ -51,7 +50,7 @@ examples/claude-local/bin/claude
 
 The wrapper expects the real Claude executable at `$HOME/.local/bin/claude`.
 Override it with `CLAUDE_REAL_BINARY` if necessary; do not point it at the wrapper.
-`VIBEMAXXER_RUN` overrides the path to `vibemaxxer-run`.
+`VIBEMAXXER_BINARY` overrides the path to `$HOME/.local/bin/vibemaxxer`.
 
 Like the remote example, the wrapper disables Claude telemetry and background
 tasks and sets `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1`. Review that

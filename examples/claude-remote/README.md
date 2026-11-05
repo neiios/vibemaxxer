@@ -1,8 +1,8 @@
 # Claude Code with remote routing
 
 This example uses the current `vibemaxxer client` / `server` commands and
-`vibemaxxer-run --remote`. The old `vibemaxxer run`, `-server`, `-server-key`,
-`-blocklist`, and `-proxy-domains` interface is no longer used. SSH now provides
+`vibemaxxer run --remote`. The old `run -server`, `-server-key`,
+`-blocklist`, and `-proxy-domains` flags are no longer used. SSH now provides
 transport encryption and peer authentication; there is no vibemaxxer server key.
 
 - `client.rules` blocks the domains in `blocked-domains.txt`, routes the domains
@@ -25,7 +25,6 @@ From the repository root, on the client:
 ```sh
 mkdir -p "$HOME/.local/bin" "$HOME/.config/vibemaxxer"
 go build -o "$HOME/.local/bin/vibemaxxer" ./cmd/vibemaxxer
-install -m755 scripts/vibemaxxer-run "$HOME/.local/bin/vibemaxxer-run"
 install -m644 examples/claude-remote/client.rules "$HOME/.config/vibemaxxer/client.rules"
 ```
 
@@ -81,7 +80,7 @@ examples/claude-remote/bin/claude
 
 The wrapper expects the real Claude executable at `$HOME/.local/bin/claude`.
 Set `CLAUDE_REAL_BINARY` to override it; it must not point to the wrapper.
-Set `VIBEMAXXER_RUN` to override `$HOME/.local/bin/vibemaxxer-run`.
+Set `VIBEMAXXER_BINARY` to override `$HOME/.local/bin/vibemaxxer`.
 The old `VIBEMAXXER_SERVER`, `VIBEMAXXER_SERVER_KEY`, `VIBEMAXXER_BLOCKLIST`, and
 `VIBEMAXXER_PROXY_DOMAINS` variables are no longer used: configure the tunnel and
 rules instead.

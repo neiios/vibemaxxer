@@ -3,7 +3,7 @@ set -euo pipefail
 
 readlink=readlink
 oo7_cli=oo7-cli
-vibemaxxer_run=${VIBEMAXXER_RUN:-"$HOME/.local/bin/vibemaxxer-run"}
+vibemaxxer=${VIBEMAXXER_BINARY:-"$HOME/.local/bin/vibemaxxer"}
 real_claude=${CLAUDE_REAL_BINARY:-"$HOME/.local/bin/claude"}
 
 [[ -x "$real_claude" ]] || {
@@ -33,4 +33,4 @@ if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]]; then
 fi
 unset token
 
-exec "$vibemaxxer_run" --remote -- "$real_claude" "$@"
+exec "$vibemaxxer" run --remote -- "$real_claude" "$@"
