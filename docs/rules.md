@@ -43,6 +43,9 @@ Both sides refuse IP literals, so programs have to connect by hostname.
 After DNS, vibemaxxer checks the address it's about to dial. It always refuses
 loopback, link-local, multicast, `0.0.0.0/8` and `fd00:ec2::/32`. That covers
 the cloud metadata addresses, `169.254.169.254` and AWS's `fd00:ec2::254`.
+Programs should reach services on their own machine directly instead, by
+listing loopback in `NO_PROXY`. `vibemaxxer run` does that for you, and the
+[quick start](../README.md#quick-start) shows the value to use.
 
 It also refuses private ranges, CGNAT and the machine's own networks, unless
 you pass `--allow-private`. That's useful on a server that has to reach

@@ -218,6 +218,7 @@ in
         bindPort = 2222
       ''}";
       systemd.services.ssh-tunnel = service "SSH forward to the AWS vibemaxxer server" "${pkgs.openssh}/bin/ssh -N aws-proxy-tunnel";
+      systemd.services.local-web = service "web server for loopback tests" "${pkgs.python3}/bin/python3 -m http.server --bind :: --directory /var/empty 9000";
       systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${standaloneRules} --listen 127.0.0.1:8082";
       systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${clientRules} --upstream 127.0.0.1:18080";
     };
@@ -291,6 +292,13 @@ in
         refused("http://x.blocked.example/", 403, "vibemaxxer-client; error=http_request_denied")
         coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
         aws.fail("journalctl -u vibemaxxer-server | grep -q blocked.example")
+
+    with subtest("vibemaxxer run reaches loopback directly and proxies the rest"):
+        RUN = "VIBEMAXXER_RUN_SCOPE=1 ${package}/bin/vibemaxxer run -- curl -sS --max-time 60 --cacert ${secrets}/tls.crt"
+        home.wait_for_open_port(9000)
+        for url in ["http://127.0.0.1:9000/", "http://localhost:9000/", "http://[::1]:9000/"]:
+            assert home.succeed(f"{RUN} -o /dev/null -w '%{{http_code}}' {url}") == "200", url
+        refused("https://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", RUN)
 
     with subtest("AWS policy is enforced independently"):
         refused("https://denied.example/", 403, "vibemaxxer-server; error=http_request_denied")

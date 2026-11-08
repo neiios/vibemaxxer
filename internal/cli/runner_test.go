@@ -42,7 +42,8 @@ exec "$@"
 	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"VIBEMAXXER_RUN_SCOPE=", "SYSTEMD_ARGS="+argsFile,
 		"HTTP_PROXY=http://old.invalid", "HTTPS_PROXY=http://old.invalid",
-		"http_proxy=http://old.invalid", "https_proxy=http://old.invalid")
+		"http_proxy=http://old.invalid", "https_proxy=http://old.invalid",
+		"NO_PROXY=*", "no_proxy=*", "ALL_PROXY=socks5://old.invalid", "all_proxy=socks5://old.invalid")
 	return cmd, argsFile
 }
 
@@ -67,14 +68,16 @@ func TestRunnerModes(t *testing.T) {
 			args = append(args, "--remote")
 		}
 		t.Run(name, func(t *testing.T) {
-			args = append(args, "--", "bash", "-c", `printf '%s\n' "$HTTP_PROXY" "$HTTPS_PROXY" "$http_proxy" "$https_proxy" "${VIBEMAXXER_RUN_SCOPE-unset}" "$@"`,
+			args = append(args, "--", "bash", "-c", `printf '%s\n' "$HTTP_PROXY" "$HTTPS_PROXY" "$http_proxy" "$https_proxy" "$NO_PROXY" "$no_proxy" "${ALL_PROXY-unset}" "${all_proxy-unset}" "${VIBEMAXXER_RUN_SCOPE-unset}" "$@"`,
 				"command", "--remote", "argument with spaces", "literal $value")
 			cmd, argsFile := runnerCommand(t, args...)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("runner: %v\n%s", err, out)
 			}
-			want := strings.Repeat("http://127.0.0.1:8080\n", 4) + "unset\n--remote\nargument with spaces\nliteral $value\n"
+			want := strings.Repeat("http://127.0.0.1:8080\n", 4) +
+				strings.Repeat("localhost,.localhost,127.0.0.1,127.0.0.0/8,::1,[::1]\n", 2) +
+				"unset\nunset\nunset\n--remote\nargument with spaces\nliteral $value\n"
 			if string(out) != want {
 				t.Fatalf("command environment/arguments = %q, want %q", out, want)
 			}

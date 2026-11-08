@@ -40,6 +40,14 @@ vibemaxxer run claude
 codex() { vibemaxxer run codex "$@"; }
 ```
 
+The command gets `HTTP_PROXY`, `HTTPS_PROXY` and their lowercase forms set to
+`http://127.0.0.1:8080`. It also gets `NO_PROXY` and `no_proxy` set to
+`localhost,.localhost,127.0.0.1,127.0.0.0/8,::1,[::1]`, so it can reach
+services on your own machine directly. Programs disagree on how to write these
+addresses, so the list has more than one form of each. Any `NO_PROXY` you had
+is replaced and `ALL_PROXY` is removed, so old values can't send traffic
+around the proxy.
+
 Each command runs in its own systemd scope, and any number of them can share
 one client. If the client isn't up after 20 seconds, `vibemaxxer run` gives
 up and doesn't start the command. Put `--` before a command whose name starts
@@ -54,5 +62,5 @@ brings the tunnel up as well and waits for it.
 
 - Codex needs 0.154.0 or newer. Older versions ignore the proxy for
   WebSockets.
-- OpenCode's background service needs the variables set with
-  `opencode service set env`.
+- OpenCode's background service needs the variables, `NO_PROXY` included,
+  set with `opencode service set env`.
