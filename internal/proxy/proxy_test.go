@@ -350,6 +350,72 @@ func TestHTTPForwarding(t *testing.T) {
 	}
 }
 
+type logLines chan string
+
+func (l logLines) Write(p []byte) (int, error) {
+	l <- string(p)
+	return len(p), nil
+}
+
+func TestRefusalLogsTarget(t *testing.T) {
+	t.Parallel()
+	rules, err := policy.Parse("client.rules", "", policy.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := make(logLines, 8)
+	p, err := New("vibemaxxer-client", rules, "", nil, slog.New(slog.NewTextHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := serve(t, p)
+	next := func() string {
+		t.Helper()
+		select {
+		case line := <-logs:
+			return line
+		case <-time.After(5 * time.Second):
+			t.Fatal("refusal was not logged")
+			return ""
+		}
+	}
+	for _, tc := range []struct {
+		target string
+		status int
+		want   string
+	}{
+		{"127.0.0.1:3773", http.StatusForbidden, "method=CONNECT target=127.0.0.1:3773 status=403"},
+		{"[::1]:443", http.StatusForbidden, "method=CONNECT target=[::1]:443 status=403"},
+		{"direct.test", http.StatusBadRequest, "method=CONNECT target=direct.test status=400"},
+	} {
+		if _, _, resp := connect(t, client, tc.target, ""); resp.StatusCode != tc.status {
+			t.Fatalf("%s: %s", tc.target, resp.Status)
+		}
+		if line := next(); !strings.Contains(line, tc.want) {
+			t.Errorf("%s logged %q, want %q", tc.target, line, tc.want)
+		}
+	}
+	conn, err := net.Dial("tcp", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprint(conn, "POST http://127.0.0.1/mcp?token=hunter2 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("POST to IP literal: %s", resp.Status)
+	}
+	line := next()
+	if !strings.Contains(line, "method=POST target=127.0.0.1 status=403") || strings.Contains(line, "mcp") || strings.Contains(line, "hunter2") {
+		t.Errorf("POST to IP literal logged %q", line)
+	}
+}
+
 func TestUpstreamUnavailable(t *testing.T) {
 	t.Parallel()
 	c := newChain(t)

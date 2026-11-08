@@ -126,6 +126,9 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request, attrs *[]any) (in
 		return 0, fail(http.StatusServiceUnavailable, "connection_limit_reached", "too many active requests")
 	}
 	host, port, err := destination(r)
+	if err != nil {
+		*attrs = append(*attrs, "target", r.URL.Host)
+	}
 	if errors.Is(err, policy.ErrIPLiteral) {
 		return 0, fail(http.StatusForbidden, "destination_ip_prohibited", err.Error())
 	}
