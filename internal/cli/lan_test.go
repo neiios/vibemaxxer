@@ -33,7 +33,7 @@ func TestLANStartup(t *testing.T) {
 		options := []string{"--server", "192.0.2.1:8443", "--server-key", strings.ToUpper(id.Fingerprint())}
 		if mode == "server" {
 			text = "allow .remote.test\n"
-			options = []string{"--tls", "--client-key", id.Fingerprint(), "--client-key", id.Fingerprint()}
+			options = []string{"--client-key", id.Fingerprint(), "--client-key", id.Fingerprint()}
 		}
 		if err := os.WriteFile(rules, []byte(text), 0600); err != nil {
 			t.Fatal(err)
@@ -67,15 +67,8 @@ func TestLANFlagPolicy(t *testing.T) {
 		{"client", []string{"--server", "192.0.2.1", "--server-key", pin}},
 		{"client", []string{"--server", ":8443", "--server-key", pin}},
 		{"client", []string{"--server", "192.0.2.1:0", "--server-key", pin}},
-		{"client", []string{"--server", "0.0.0.0:8443", "--server-key", pin}},
 		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--listen", "192.0.2.2:8080"}},
-		{"client", []string{"--key", key}},
-		{"server", []string{"--tls"}},
-		{"server", []string{"--client-key", pin}},
-		{"server", []string{"--tls", "--client-key", "bad"}},
-		{"server", []string{"--tls", "--client-key", pin, "--listen", "0.0.0.0:8443"}},
-		{"server", []string{"--tls", "--client-key", pin, "--listen", "[::]:8443"}},
-		{"server", []string{"--key", key}},
+		{"server", []string{"--client-key", "bad"}},
 	} {
 		rules := clientRules
 		if tc.mode == "server" {
@@ -88,19 +81,5 @@ func TestLANFlagPolicy(t *testing.T) {
 	}
 	if _, err := os.Stat(key); !os.IsNotExist(err) {
 		t.Fatal("invalid options created an identity")
-	}
-}
-
-func TestLANListen(t *testing.T) {
-	t.Parallel()
-	for _, address := range []string{"192.0.2.1:8443", "192.168.1.50:8443", "127.0.0.1:8443", "[fd00::1]:8443"} {
-		if err := lanListen(address); err != nil {
-			t.Errorf("%s: %v", address, err)
-		}
-	}
-	for _, address := range []string{"0.0.0.0:8443", "[::]:8443", "[::ffff:0.0.0.0]:8443", "224.0.0.1:8443", "localhost:8443", "192.168.1.50:0"} {
-		if err := lanListen(address); err == nil {
-			t.Errorf("accepted %s", address)
-		}
 	}
 }

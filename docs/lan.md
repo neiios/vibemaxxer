@@ -30,13 +30,13 @@ On the machine traffic should leave from, write a `server.rules` with `allow`
 rules and run:
 
 ```sh
-vibemaxxer server --tls --listen 192.168.1.50:8443 \
+vibemaxxer server --listen 192.168.1.50:8443 \
   --client-key CLIENT_FINGERPRINT --rules server.rules
 ```
 
-`--listen` needs to be a real address like the machine's LAN IP, not a
-wildcard like `0.0.0.0`. Repeat `--client-key` for every client you want to
-let in. The server rejects unknown keys during the TLS handshake, before it
+Passing `--client-key` makes the server accept TLS, and `--listen` can then
+be any address, such as the machine's LAN IP. Repeat `--client-key` for every
+client you want to let in. The server rejects unknown keys during the TLS handshake, before it
 reads any HTTP.
 
 ## 3. Start the client

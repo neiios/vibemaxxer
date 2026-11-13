@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/netip"
 	"strings"
 
 	"github.com/neiios/vibemaxxer/internal/identity"
@@ -28,7 +27,6 @@ type lanOptions struct {
 	key       string
 	server    string
 	serverKey string
-	tls       bool
 	clients   fingerprints
 }
 
@@ -38,52 +36,43 @@ func (o *lanOptions) flags(flags *flag.FlagSet, mode policy.Mode) {
 		flags.StringVar(&o.server, "server", "", "send proxied traffic to this LAN server")
 		flags.StringVar(&o.serverKey, "server-key", "", "fingerprint of the LAN server")
 	} else {
-		flags.BoolVar(&o.tls, "tls", false, "accept LAN clients over TLS")
-		flags.Var(&o.clients, "client-key", "fingerprint of an allowed LAN client (repeatable)")
+		flags.Var(&o.clients, "client-key", "accept LAN clients over TLS with this fingerprint (repeatable)")
 	}
 }
 
-func (o *lanOptions) validate(mode policy.Mode, upstream string, keySet bool) error {
-	if mode == policy.Client {
-		if o.server != "" {
-			if upstream != "" {
-				return errors.New("--server (LAN TLS) and --upstream (SSH) are mutually exclusive")
-			}
-			host, port, err := net.SplitHostPort(o.server)
-			if err != nil || host == "" {
-				return errors.New("--server must be HOST:PORT")
-			}
-			if _, err := policy.Port(port); err != nil {
-				return fmt.Errorf("--server: %w", err)
-			}
-			if addr, err := netip.ParseAddr(host); err == nil && (addr.Unmap().IsUnspecified() || addr.Unmap().IsMulticast()) {
-				return errors.New("--server must not be a wildcard or multicast address")
-			}
-			pin, err := identity.ParseFingerprint(o.serverKey)
-			if err != nil {
-				return fmt.Errorf("--server-key is required with --server: %w", err)
-			}
-			o.serverKey = pin
-		} else if o.serverKey != "" || keySet {
-			return errors.New("--server-key and --key require --server")
-		}
-	} else if !o.tls && (len(o.clients) != 0 || keySet) {
-		return errors.New("--client-key and --key require --tls")
-	} else if o.tls && len(o.clients) == 0 {
-		return errors.New("--tls requires at least one --client-key")
+func (o *lanOptions) validate(upstream string) error {
+	switch {
+	case o.server == "" && o.serverKey != "":
+		return errors.New("--server-key requires --server")
+	case o.server == "":
+		return nil
+	case upstream != "":
+		return errors.New("--server (LAN TLS) and --upstream (SSH) are mutually exclusive")
 	}
+	host, port, err := net.SplitHostPort(o.server)
+	if err != nil || host == "" {
+		return errors.New("--server must be HOST:PORT")
+	}
+	if _, err := policy.Port(port); err != nil {
+		return fmt.Errorf("--server: %w", err)
+	}
+	pin, err := identity.ParseFingerprint(o.serverKey)
+	if err != nil {
+		return fmt.Errorf("--server-key is required with --server: %w", err)
+	}
+	o.serverKey = pin
 	return nil
 }
 
-func (o *lanOptions) config(mode policy.Mode) (*tls.Config, error) {
-	if o.server == "" && !o.tls {
+func (o *lanOptions) config() (*tls.Config, error) {
+	if o.server == "" && len(o.clients) == 0 {
 		return nil, nil
 	}
 	id, err := identity.Load(o.key)
 	if err != nil {
 		return nil, err
 	}
-	if mode == policy.Client {
+	if o.server != "" {
 		return id.ClientTLS(o.serverKey), nil
 	}
 	clients := make(map[string]bool, len(o.clients))
@@ -91,14 +80,6 @@ func (o *lanOptions) config(mode policy.Mode) (*tls.Config, error) {
 		clients[pin] = true
 	}
 	return id.ServerTLS(clients), nil
-}
-
-func lanListen(value string) error {
-	addr, err := netip.ParseAddrPort(value)
-	if err != nil || addr.Port() == 0 || !(addr.Addr().Unmap().IsGlobalUnicast() || addr.Addr().Unmap().IsLoopback()) {
-		return errors.New("--listen must be a specific IP:PORT with --tls, not a wildcard such as 0.0.0.0")
-	}
-	return nil
 }
 
 func keyCommand(args []string) error {

@@ -75,17 +75,13 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q; see vibemaxxer %s --help", flags.Arg(0), name)
 	}
-	keySet := false
-	flags.Visit(func(f *flag.Flag) { keySet = keySet || f.Name == "key" })
-	if err := lan.validate(mode, upstream, keySet); err != nil {
+	if err := lan.validate(upstream); err != nil {
 		return err
 	}
-	validateListen := func(value string) error { return loopback("--listen", value) }
-	if lan.tls {
-		validateListen = lanListen
-	}
-	if err := validateListen(*listen); err != nil {
-		return err
+	if len(lan.clients) == 0 {
+		if err := loopback("--listen", *listen); err != nil {
+			return err
+		}
 	}
 	if upstream != "" {
 		if err := loopback("--upstream", upstream); err != nil {
@@ -100,7 +96,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 		return err
 	}
 	dial := proxy.Dialer(mode == policy.Client)
-	tlsConfig, err := lan.config(mode)
+	tlsConfig, err := lan.config()
 	if err != nil {
 		return err
 	}
@@ -118,11 +114,11 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	if lan.tls {
+	if len(lan.clients) > 0 {
 		listener = tls.NewListener(listener, tlsConfig)
 	}
 	transport := "none"
-	if lan.server != "" || lan.tls {
+	if tlsConfig != nil {
 		transport = "tls"
 	} else if upstream != "" {
 		transport = "ssh-forward"

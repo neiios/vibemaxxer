@@ -23,7 +23,7 @@ Give each machine's fingerprint to the other.
 
 ```sh
 install -m644 examples/claude-lan/server.rules ~/.config/vibemaxxer/
-vibemaxxer server --tls --listen 192.168.1.50:8443 \
+vibemaxxer server --listen 192.168.1.50:8443 \
   --client-key WORKSTATION_FINGERPRINT --rules ~/.config/vibemaxxer/server.rules
 ```
 

@@ -356,7 +356,7 @@ in
         binary = "${package}/bin/vibemaxxer"
         home_pin = home.succeed(f"{binary} key --key /tmp/home-lan.pem").strip()
         aws_pin = aws.succeed(f"{binary} key --key /tmp/aws-lan.pem").strip()
-        aws.succeed(f"systemd-run --unit=vibemaxxer-lan-server {binary} server --tls "
+        aws.succeed(f"systemd-run --unit=vibemaxxer-lan-server {binary} server "
                     f"--listen {AWS}:8443 --key /tmp/aws-lan.pem --client-key {home_pin} --rules ${serverRules}")
         aws.wait_for_unit("vibemaxxer-lan-server.service")
         home.succeed(f"systemd-run --unit=vibemaxxer-lan-client {binary} client "
