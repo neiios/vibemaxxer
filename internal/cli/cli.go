@@ -61,13 +61,13 @@ func Run(logger *slog.Logger, args []string) error {
 
 func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen string, args []string) error {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
-	listen := flags.String("listen", defaultListen, "address to listen on")
-	rules := flags.String("rules", "", "rules file (required)")
+	listen := flags.String("listen", defaultListen, "listen on `ADDR`")
+	rules := flags.String("rules", "", "read rules from `FILE` (required)")
 	var lan lanOptions
 	lan.flags(flags, mode)
 	var upstream string
 	if mode == policy.Client {
-		flags.StringVar(&upstream, "upstream", "", "send proxied traffic to this SSH forward")
+		flags.StringVar(&upstream, "upstream", "", "send proxied traffic to the SSH forward at `ADDR`")
 	}
 	if err := parseOptions(flags, "Usage: vibemaxxer "+name+" --rules FILE [OPTION...]", args); err != nil {
 		return err

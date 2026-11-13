@@ -3,50 +3,28 @@ package cli
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 	"time"
 )
 
-const runnerUsage = "usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]"
-
-const runnerHelp = `Usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]
+const runnerHeader = `Usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]
 
 Starts the proxy, runs COMMAND through it, and stops the proxy when
 the last command exits. It needs the systemd user units described in
-docs/run.md.
-
-Options:
-  --remote     also start the SSH tunnel
-  -h, --help   show this help`
+docs/run.md.`
 
 func runCommand(args []string) error {
-	remote := false
-parse:
-	for len(args) > 0 {
-		switch args[0] {
-		case "--remote":
-			remote = true
-			args = args[1:]
-		case "--":
-			args = args[1:]
-			break parse
-		case "-h", "-help", "--help":
-			fmt.Fprintln(os.Stdout, runnerHelp)
-			return flag.ErrHelp
-		default:
-			if strings.HasPrefix(args[0], "-") {
-				return fmt.Errorf("unknown run option %q; %s", args[0], runnerUsage)
-			}
-			break parse
-		}
+	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	remoteFlag := flags.Bool("remote", false, "also start the SSH tunnel")
+	if err := parseOptions(flags, runnerHeader, args); err != nil {
+		return err
 	}
+	remote, args := *remoteFlag, flags.Args()
 	if len(args) == 0 {
-		return errors.New(runnerUsage)
+		return errors.New("missing COMMAND; see vibemaxxer run --help")
 	}
 
 	if os.Getenv("VIBEMAXXER_RUN_SCOPE") == "" {

@@ -11,16 +11,6 @@ import (
 	"text/tabwriter"
 )
 
-var metavars = map[string]string{
-	"rules":      "FILE",
-	"key":        "FILE",
-	"listen":     "ADDR",
-	"upstream":   "ADDR",
-	"server":     "HOST:PORT",
-	"server-key": "FINGERPRINT",
-	"client-key": "FINGERPRINT",
-}
-
 var flagName = regexp.MustCompile(`(^|\s)-([a-z][a-z-]+)`)
 
 var flagErrors = strings.NewReplacer(
@@ -47,11 +37,11 @@ func printHelp(out io.Writer, flags *flag.FlagSet, header string) {
 	fmt.Fprintf(out, "%s\n\nOptions:\n", header)
 	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 	flags.VisitAll(func(f *flag.Flag) {
+		metavar, usage := flag.UnquoteUsage(f)
 		name := "--" + f.Name
-		if v := metavars[f.Name]; v != "" {
-			name += " " + v
+		if metavar != "" {
+			name += " " + metavar
 		}
-		usage := f.Usage
 		if f.DefValue != "" && f.DefValue != "false" {
 			usage += " (default " + f.DefValue + ")"
 		}

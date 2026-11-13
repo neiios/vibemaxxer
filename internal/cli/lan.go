@@ -31,12 +31,12 @@ type lanOptions struct {
 }
 
 func (o *lanOptions) flags(flags *flag.FlagSet, mode policy.Mode) {
-	flags.StringVar(&o.key, "key", identity.DefaultKeyPath(), "identity file for LAN TLS")
+	flags.StringVar(&o.key, "key", identity.DefaultKeyPath(), "read the LAN TLS identity from `FILE`")
 	if mode == policy.Client {
-		flags.StringVar(&o.server, "server", "", "send proxied traffic to this LAN server")
-		flags.StringVar(&o.serverKey, "server-key", "", "fingerprint of the LAN server")
+		flags.StringVar(&o.server, "server", "", "send proxied traffic to the LAN server at `HOST:PORT`")
+		flags.StringVar(&o.serverKey, "server-key", "", "expect the LAN server to have this `FINGERPRINT`")
 	} else {
-		flags.Var(&o.clients, "client-key", "accept LAN clients over TLS with this fingerprint (repeatable)")
+		flags.Var(&o.clients, "client-key", "accept the LAN client with this `FINGERPRINT` over TLS (repeatable)")
 	}
 }
 
@@ -84,7 +84,7 @@ func (o *lanOptions) config() (*tls.Config, error) {
 
 func keyCommand(args []string) error {
 	flags := flag.NewFlagSet("key", flag.ContinueOnError)
-	path := flags.String("key", identity.DefaultKeyPath(), "identity file")
+	path := flags.String("key", identity.DefaultKeyPath(), "read the identity from `FILE`")
 	if err := parseOptions(flags, "Usage: vibemaxxer key [--key FILE]\n\nPrints this machine's key fingerprint. Creates the key first if it\ndoesn't exist.", args); err != nil {
 		return err
 	}

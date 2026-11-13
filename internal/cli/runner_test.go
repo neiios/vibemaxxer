@@ -141,7 +141,7 @@ func TestRunnerUsage(t *testing.T) {
 		if _, statErr := os.Stat(argsFile); !os.IsNotExist(statErr) {
 			t.Errorf("invalid invocation started a scope: %v", statErr)
 		}
-		if err == nil || !strings.Contains(string(out), "usage:") {
+		if err == nil || !strings.Contains(string(out), "see vibemaxxer run --help") {
 			t.Errorf("%v: %q, %v", args, out, err)
 		}
 	}
