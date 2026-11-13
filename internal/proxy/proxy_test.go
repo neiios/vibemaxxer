@@ -608,15 +608,40 @@ func TestGuard(t *testing.T) {
 			t.Errorf("%s: allowed=%v, want %v", addr, got, want)
 		}
 	}
-	dial, err := Dialer(false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dial := Dialer(false)
 	_, port, _ := net.SplitHostPort(echoServer(t))
 	for _, host := range []string{"127.0.0.1", "::1", "localhost", "app.localhost"} {
 		if _, err := dial(context.Background(), "tcp", net.JoinHostPort(host, port)); !errors.Is(err, errProhibited) {
 			t.Errorf("loopback dial to %s: %v", host, err)
 		}
+	}
+}
+
+func TestDialerRefusesOwnAddresses(t *testing.T) {
+	t.Parallel()
+	g, err := interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tested := false
+	for _, addr := range g.own {
+		if !addr.IsGlobalUnicast() {
+			continue
+		}
+		listener, err := net.Listen("tcp", netip.AddrPortFrom(addr, 0).String())
+		if err != nil {
+			continue
+		}
+		defer listener.Close()
+		tested = true
+		for _, client := range []bool{true, false} {
+			if _, err := Dialer(client)(context.Background(), "tcp", listener.Addr().String()); !errors.Is(err, errProhibited) {
+				t.Errorf("client=%v dial to own address %s: %v", client, listener.Addr(), err)
+			}
+		}
+	}
+	if !tested {
+		t.Skip("no global unicast interface address")
 	}
 }
 
@@ -659,10 +684,7 @@ func TestLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dial := Dialer(true)
 	p, err := New("vibemaxxer-client", rules, upstream.Addr().String(), dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -735,10 +757,7 @@ func TestServerRefusesLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dial := Dialer(false)
 	p, err := New("vibemaxxer-server", rules, "", dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)

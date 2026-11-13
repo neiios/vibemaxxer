@@ -53,25 +53,33 @@ func (g guard) allowed(addr netip.Addr, lan bool) bool {
 	return true
 }
 
-func Dialer(client bool) (DialFunc, error) {
+func interfaces() (guard, error) {
 	var g guard
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil, err
+		return g, err
 	}
 	for _, addr := range addrs {
 		prefix, err := netip.ParsePrefix(addr.String())
 		if err != nil {
-			return nil, err
+			return g, err
 		}
 		g.own = append(g.own, prefix.Addr().Unmap().WithZone(""))
 		g.local = append(g.local, prefix.Masked())
 	}
+	return g, nil
+}
+
+func Dialer(client bool) DialFunc {
 	dialer := net.Dialer{
 		Timeout:   dialTimeout,
 		KeepAlive: 30 * time.Second,
 		ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
 			endpoint, err := netip.ParseAddrPort(address)
+			if err != nil {
+				return errProhibited
+			}
+			g, err := interfaces()
 			if err != nil || !g.allowed(endpoint.Addr(), client) {
 				return errProhibited
 			}
@@ -98,5 +106,5 @@ func Dialer(client bool) (DialFunc, error) {
 			}
 		}
 		return conn, err
-	}, nil
+	}
 }

@@ -99,10 +99,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	dial, err := proxy.Dialer(mode == policy.Client)
-	if err != nil {
-		return err
-	}
+	dial := proxy.Dialer(mode == policy.Client)
 	tlsConfig, err := lan.config(mode)
 	if err != nil {
 		return err

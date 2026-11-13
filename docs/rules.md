@@ -65,7 +65,8 @@ After DNS, vibemaxxer checks the address it's about to dial. It always refuses
 loopback, link-local, multicast, `0.0.0.0/8`, `fd00:ec2::/32` and the
 machine's own addresses. That covers the cloud metadata addresses,
 `169.254.169.254` and AWS's `fd00:ec2::254`, and names that resolve to your
-own machine.
+own machine. It reads the machine's addresses on every connection, so this
+keeps working when the machine changes networks.
 
 The server also refuses private ranges, CGNAT and the networks it's on, so
 nothing sent through it reaches the server's own network. The client allows
