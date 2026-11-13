@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -43,21 +42,12 @@ func Load(path string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return FromKey(key)
-}
-
-func FromKey(key ed25519.PrivateKey) (*Identity, error) {
-	if len(key) != ed25519.PrivateKeySize {
-		return nil, errors.New("invalid identity key")
-	}
 	cert, err := selfSigned(key)
 	if err != nil {
 		return nil, err
 	}
 	return &Identity{key: key, cert: cert}, nil
 }
-
-func (id *Identity) Key() ed25519.PrivateKey { return id.key }
 
 func readKey(path string) (ed25519.PrivateKey, error) {
 	data, err := os.ReadFile(path)
@@ -173,7 +163,7 @@ func (id *Identity) ClientTLS(serverKey string) *tls.Config {
 			if err != nil {
 				return err
 			}
-			if subtle.ConstantTimeCompare([]byte(key), []byte(serverKey)) != 1 {
+			if key != serverKey {
 				return fmt.Errorf("server identity %s does not match --server-key", key)
 			}
 			return nil

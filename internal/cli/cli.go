@@ -100,13 +100,11 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	var p *proxy.Proxy
+	var upstreamTLS *tls.Config
 	if lan.server != "" {
-		upstream = lan.server
-		p, err = proxy.NewTLS("vibemaxxer-"+name, pol, upstream, tlsConfig, dial, logger)
-	} else {
-		p, err = proxy.New("vibemaxxer-"+name, pol, upstream, dial, logger)
+		upstream, upstreamTLS = lan.server, tlsConfig
 	}
+	p, err := proxy.New("vibemaxxer-"+name, pol, upstream, upstreamTLS, dial, logger)
 	if err != nil {
 		return err
 	}

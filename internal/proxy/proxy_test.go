@@ -138,7 +138,7 @@ func newChain(t *testing.T) *chain {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New("vibemaxxer-server", serverPolicy, "", c.serverDNS.dial, logger)
+	server, err := New("vibemaxxer-server", serverPolicy, "", nil, c.serverDNS.dial, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func newChain(t *testing.T) *chain {
 
 func (c *chain) newClient(t *testing.T, upstream string, idle time.Duration) (*Proxy, string) {
 	t.Helper()
-	p, err := New("vibemaxxer-client", c.clientPolicy, upstream, c.clientDNS.dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", c.clientPolicy, upstream, nil, c.clientDNS.dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestStandaloneFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := New("vibemaxxer-client", rules, "", dns.dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", rules, "", nil, dns.dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestProxyRulesRequireUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := New("vibemaxxer-client", rules, "", nil, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", rules, "", nil, nil, slog.New(slog.DiscardHandler))
 	if err == nil || !strings.Contains(err.Error(), "proxy rules require --upstream") || p != nil {
 		t.Fatalf("New without upstream = %v, %v", p, err)
 	}
@@ -432,7 +432,7 @@ func TestRefusalLogsTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	logs := make(logLines, 8)
-	p, err := New("vibemaxxer-client", rules, "", nil, slog.New(slog.NewTextHandler(logs, nil)))
+	p, err := New("vibemaxxer-client", rules, "", nil, nil, slog.New(slog.NewTextHandler(logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func TestLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	dial := Dialer(true)
-	p, err := New("vibemaxxer-client", rules, upstream.Addr().String(), dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", rules, upstream.Addr().String(), nil, dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -758,7 +758,7 @@ func TestServerRefusesLoopback(t *testing.T) {
 		t.Fatal(err)
 	}
 	dial := Dialer(false)
-	p, err := New("vibemaxxer-server", rules, "", dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-server", rules, "", nil, dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

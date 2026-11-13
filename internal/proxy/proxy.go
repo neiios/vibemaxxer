@@ -42,18 +42,7 @@ type Proxy struct {
 	idle         time.Duration
 }
 
-func New(name string, rules *policy.Policy, upstream string, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
-	return newProxy(name, rules, upstream, nil, dial, logger)
-}
-
-func NewTLS(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
-	if config == nil || upstream == "" {
-		return nil, errors.New("TLS upstream requires an address and TLS configuration")
-	}
-	return newProxy(name, rules, upstream, config.Clone(), dial, logger)
-}
-
-func newProxy(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
+func New(name string, rules *policy.Policy, upstream string, config *tls.Config, dial DialFunc, logger *slog.Logger) (*Proxy, error) {
 	if upstream == "" && rules.RequiresUpstream() {
 		return nil, errors.New("proxy rules require --upstream (SSH) or --server and --server-key (LAN TLS)")
 	}

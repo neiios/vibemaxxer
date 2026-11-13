@@ -34,7 +34,7 @@ func lanChain(t *testing.T) (*chain, *identity.Identity, *identity.Identity) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := New("vibemaxxer-server", rules, "", c.serverDNS.dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-server", rules, "", nil, c.serverDNS.dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func lanChain(t *testing.T) (*chain, *identity.Identity, *identity.Identity) {
 
 func (c *chain) tlsClient(t *testing.T, config *tls.Config) (*Proxy, string) {
 	t.Helper()
-	p, err := NewTLS("vibemaxxer-client", c.clientPolicy, c.server, config, c.clientDNS.dial, slog.New(slog.DiscardHandler))
+	p, err := New("vibemaxxer-client", c.clientPolicy, c.server, config, c.clientDNS.dial, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
