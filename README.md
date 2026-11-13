@@ -31,14 +31,11 @@ it:
 
 ```sh
 export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
-export NO_PROXY='localhost,.localhost,127.0.0.1,127.0.0.0/8,::1,[::1]'
 curl https://example.com
 ```
 
-Blocked hosts get a 403 and everything else connects directly. `NO_PROXY`
-lets programs reach services on your own machine, like a dev server or a
-local MCP server. vibemaxxer refuses loopback, so without it those requests
-fail.
+Blocked hosts get a 403 and everything else connects directly, including
+services on your own machine like a dev server or a local MCP server.
 [Rules](docs/rules.md) has the full syntax, and [vibemaxxer run](docs/run.md)
 shows how to start the proxy only when a command needs it.
 
@@ -67,11 +64,10 @@ The [examples](examples/) run Claude Code through vibemaxxer in each mode:
 ## Caveats
 
 vibemaxxer isn't a sandbox. A program that ignores the proxy variables
-bypasses it, and so does anything in `NO_PROXY`. `vibemaxxer run` sets
-`NO_PROXY` to loopback only and drops any value you had, so programs reach
-services on your own machine directly and everything else goes through the
-proxy. The proxy also doesn't authenticate local clients, so any process on
-the machine can use it.
+bypasses it, and so does anything in `NO_PROXY`. `vibemaxxer run` removes
+`NO_PROXY`, but anything written in Go and most browsers still connect to your
+own machine directly, so `localhost` rules don't apply to them. The proxy also doesn't authenticate
+local clients, so any process on the machine can use it.
 
 ## Building
 

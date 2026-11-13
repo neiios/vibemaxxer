@@ -32,6 +32,8 @@ func (a Action) String() string {
 
 var ErrIPLiteral = errors.New("IP literal destinations are not allowed; use a hostname")
 
+const Loopback = "localhost"
+
 type rule struct {
 	action  Action
 	domain  string
@@ -76,13 +78,13 @@ var syntax = [...]struct {
 	actions map[string]Action
 	usage   string
 }{
-	Client: {map[string]Action{"block": Block, "proxy": Proxy}, "block DOMAIN | proxy DOMAIN"},
-	Server: {map[string]Action{"deny": Block, "allow": Direct}, "deny DOMAIN | allow DOMAIN [PORT,...]"},
+	Client: {map[string]Action{"block": Block, "proxy": Proxy}, "block DOMAIN [PORT,...] | proxy DOMAIN"},
+	Server: {map[string]Action{"deny": Block, "allow": Direct}, "deny DOMAIN [PORT,...] | allow DOMAIN [PORT,...]"},
 }
 
 func parseRule(mode Mode, fields []string) (rule, error) {
 	action, ok := syntax[mode].actions[fields[0]]
-	withPorts := mode == Server && action == Direct
+	withPorts := action != Proxy
 	if !ok || len(fields) < 2 || len(fields) > 3 || len(fields) == 3 && !withPorts {
 		return rule{}, fmt.Errorf("expected %s", syntax[mode].usage)
 	}
@@ -100,7 +102,13 @@ func parseRule(mode Mode, fields []string) (rule, error) {
 		}
 		r.domain = name
 	}
-	if withPorts {
+	switch {
+	case r.domain == Loopback && !strings.EqualFold(strings.Trim(fields[1], "."), Loopback):
+		return rule{}, fmt.Errorf("domain %q: write \"localhost\" to match loopback", fields[1])
+	case r.domain == Loopback && action != Block:
+		return rule{}, errors.New("localhost only takes block rules: it is never proxied and the server never connects to it")
+	}
+	if len(fields) == 3 || mode == Server && action == Direct {
 		list := "443"
 		if len(fields) == 3 {
 			list = fields[2]
@@ -118,7 +126,10 @@ func parseRule(mode Mode, fields []string) (rule, error) {
 
 func Host(name string) (string, error) {
 	name = strings.ToLower(strings.TrimSuffix(name, "."))
-	if _, err := netip.ParseAddr(name); err == nil {
+	if addr, err := netip.ParseAddr(name); err == nil {
+		if addr.Unmap().IsLoopback() {
+			return Loopback, nil
+		}
 		return "", ErrIPLiteral
 	}
 	if name == "" || len(name) > 253 {
@@ -137,6 +148,9 @@ func Host(name string) (string, error) {
 	}
 	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
 		return "", ErrIPLiteral
+	}
+	if labels[len(labels)-1] == Loopback {
+		return Loopback, nil
 	}
 	return name, nil
 }
@@ -163,13 +177,13 @@ func (p *Policy) RequiresUpstream() bool {
 func (p *Policy) Decide(host string, port int) (Action, string) {
 	match := -1
 	for i, r := range p.rules {
-		if !r.matches(host) {
+		if !r.matches(host) || r.ports != nil && !slices.Contains(r.ports, port) {
 			continue
 		}
 		if r.action == Block {
 			return Block, r.id
 		}
-		if match < 0 && (r.ports == nil || slices.Contains(r.ports, port)) {
+		if match < 0 && !(r.action == Proxy && host == Loopback) {
 			match = i
 		}
 	}

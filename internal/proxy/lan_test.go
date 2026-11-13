@@ -74,7 +74,7 @@ func TestLANRouting(t *testing.T) {
 		{"secret.proxied.test:443", 403},
 		{"denied.test:443", 403},
 		{"proxied.test:8443", 403},
-		{"127.0.0.1:443", 403},
+		{"203.0.113.7:443", 403},
 	} {
 		t.Run(tc.target, func(t *testing.T) {
 			conn, reader, resp := connect(t, c.client, tc.target, "early")

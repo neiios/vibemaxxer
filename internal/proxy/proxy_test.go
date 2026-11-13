@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -277,8 +278,8 @@ func TestConnectRouting(t *testing.T) {
 		{"denied.test:443", 403, "vibemaxxer-server; error=http_request_denied", false, false},
 		{"secret.proxied.test:443", 403, "vibemaxxer-server; error=http_request_denied", false, false},
 		{"proxied.test:8443", 403, "vibemaxxer-server; error=http_request_denied", false, false},
-		{"127.0.0.1:443", 403, "vibemaxxer-client; error=destination_ip_prohibited", false, false},
-		{"[::1]:443", 403, "vibemaxxer-client; error=destination_ip_prohibited", false, false},
+		{"203.0.113.7:443", 403, "vibemaxxer-client; error=destination_ip_prohibited", false, false},
+		{"[2001:db8::1]:443", 403, "vibemaxxer-client; error=destination_ip_prohibited", false, false},
 		{"unknown.test:443", 502, "vibemaxxer-client; error=dns_error", true, false},
 		{"direct.test", 400, "vibemaxxer-client; error=http_request_error", false, false},
 		{"direct.test:0443", 400, "vibemaxxer-client; error=http_request_error", false, false},
@@ -335,7 +336,7 @@ func TestHTTPForwarding(t *testing.T) {
 	for _, request := range []string{
 		"GET / HTTP/1.1\r\nHost: direct.test\r\n\r\n",
 		"GET https://direct.test/ HTTP/1.1\r\nHost: direct.test\r\n\r\n",
-		"GET http://127.0.0.1/ HTTP/1.1\r\nHost: x\r\n\r\n",
+		"GET http://203.0.113.7/ HTTP/1.1\r\nHost: x\r\n\r\n",
 	} {
 		fmt.Fprint(conn, request)
 		resp, err := http.ReadResponse(reader, nil)
@@ -384,8 +385,8 @@ func TestRefusalLogsTarget(t *testing.T) {
 		status int
 		want   string
 	}{
-		{"127.0.0.1:3773", http.StatusForbidden, "method=CONNECT target=127.0.0.1:3773 status=403"},
-		{"[::1]:443", http.StatusForbidden, "method=CONNECT target=[::1]:443 status=403"},
+		{"203.0.113.7:3773", http.StatusForbidden, "method=CONNECT target=203.0.113.7:3773 status=403"},
+		{"[2001:db8::1]:443", http.StatusForbidden, "method=CONNECT target=[2001:db8::1]:443 status=403"},
 		{"direct.test", http.StatusBadRequest, "method=CONNECT target=direct.test status=400"},
 	} {
 		if _, _, resp := connect(t, client, tc.target, ""); resp.StatusCode != tc.status {
@@ -401,7 +402,7 @@ func TestRefusalLogsTarget(t *testing.T) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	fmt.Fprint(conn, "POST http://127.0.0.1/mcp?token=hunter2 HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n")
+	fmt.Fprint(conn, "POST http://203.0.113.7/mcp?token=hunter2 HTTP/1.1\r\nHost: 203.0.113.7\r\nContent-Length: 0\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -411,7 +412,7 @@ func TestRefusalLogsTarget(t *testing.T) {
 		t.Fatalf("POST to IP literal: %s", resp.Status)
 	}
 	line := next()
-	if !strings.Contains(line, "method=POST target=127.0.0.1 status=403") || strings.Contains(line, "mcp") || strings.Contains(line, "hunter2") {
+	if !strings.Contains(line, "method=POST target=203.0.113.7 status=403") || strings.Contains(line, "mcp") || strings.Contains(line, "hunter2") {
 		t.Errorf("POST to IP literal logged %q", line)
 	}
 }
@@ -534,12 +535,146 @@ func TestGuard(t *testing.T) {
 			t.Errorf("%s: allowed=%v, want %v", addr, got, want)
 		}
 	}
-	dial, err := Dialer(false)
+	dial, err := Dialer(true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, port, _ := net.SplitHostPort(echoServer(t))
+	for _, host := range []string{"127.0.0.1", "::1", "localhost", "app.localhost"} {
+		if _, err := dial(context.Background(), "tcp", net.JoinHostPort(host, port)); !errors.Is(err, errProhibited) {
+			t.Errorf("loopback dial to %s: %v", host, err)
+		}
+	}
+}
+
+func TestLoopback(t *testing.T) {
+	t.Parallel()
 	echo := echoServer(t)
-	if _, err := dial(context.Background(), "tcp", echo); err == nil || !strings.Contains(err.Error(), errProhibited.Error()) {
-		t.Fatalf("loopback dial: %v", err)
+	_, port, _ := net.SplitHostPort(echo)
+	release := make(chan struct{})
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "host=%s\n", r.Host)
+		http.NewResponseController(w).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		fmt.Fprint(w, "done\n")
+	}))
+	t.Cleanup(origin.Close)
+	t.Cleanup(func() { close(release) })
+	_, originPort, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { upstream.Close() })
+	go func() {
+		if conn, err := upstream.Accept(); err == nil {
+			conn.Close()
+			t.Error("loopback request reached the upstream")
+		}
+	}()
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, closedPort, _ := net.SplitHostPort(closed.Addr().String())
+	closed.Close()
+
+	rules, err := policy.Parse("client.rules", "proxy *\nblock localhost 2375,"+closedPort+"\n", policy.Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial, err := Dialer(false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New("vibemaxxer-client", rules, upstream.Addr().String(), dial, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := serve(t, p)
+	for _, tc := range []struct {
+		target      string
+		status      int
+		proxyStatus string
+	}{
+		{"localhost:" + port, 200, ""},
+		{"LocalHost.:" + port, 200, ""},
+		{"app.localhost:" + port, 200, ""},
+		{"127.0.0.1:" + port, 200, ""},
+		{"[::ffff:127.0.0.1]:" + port, 200, ""},
+		{"127.0.0.2:" + port, 502, "vibemaxxer-client; error=connection_refused"},
+		{"localhost:2375", 403, "vibemaxxer-client; error=http_request_denied"},
+		{"127.0.0.1:2375", 403, "vibemaxxer-client; error=http_request_denied"},
+		{"[::1]:2375", 403, "vibemaxxer-client; error=http_request_denied"},
+		{"app.localhost:2375", 403, "vibemaxxer-client; error=http_request_denied"},
+		{"localhost:" + closedPort, 403, "vibemaxxer-client; error=http_request_denied"},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			conn, reader, resp := connect(t, client, tc.target, "early")
+			if resp.StatusCode != tc.status || !strings.HasPrefix(resp.Header.Get("Proxy-Status"), tc.proxyStatus) {
+				t.Fatalf("status %d %q; want %d %q", resp.StatusCode, resp.Header.Get("Proxy-Status"), tc.status, tc.proxyStatus)
+			}
+			if tc.status == 200 {
+				assertEcho(t, conn, reader, "early", "payload")
+			}
+		})
+	}
+	if echo6, err := net.Listen("tcp", "[::1]:0"); err == nil {
+		t.Cleanup(func() { echo6.Close() })
+		go func() {
+			if conn, err := echo6.Accept(); err == nil {
+				fmt.Fprint(conn, "v6")
+				conn.Close()
+			}
+		}()
+		_, port6, _ := net.SplitHostPort(echo6.Addr().String())
+		_, reader, resp := connect(t, client, "localhost:"+port6, "")
+		if got, _ := io.ReadAll(reader); resp.StatusCode != 200 || string(got) != "v6" {
+			t.Errorf("localhost IPv6 fallback: %s %q", resp.Status, got)
+		}
+	}
+
+	conn, err := net.Dial("tcp", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(conn, "GET http://app.localhost:%s/stream HTTP/1.1\r\nHost: app.localhost:%s\r\n\r\n", originPort, originPort)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil || first != "host=app.localhost:"+originPort+"\n" {
+		t.Fatalf("streamed first line = %q, %v", first, err)
+	}
+}
+
+func TestServerRefusesLoopback(t *testing.T) {
+	t.Parallel()
+	_, port, _ := net.SplitHostPort(echoServer(t))
+	rules, err := policy.Parse("server.rules", "allow * "+port+"\n", policy.Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial, err := Dialer(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := New("vibemaxxer-server", rules, "", dial, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := serve(t, p)
+	for _, host := range []string{"localhost", "app.localhost", "127.0.0.1", "[::1]"} {
+		_, _, resp := connect(t, server, host+":"+port, "")
+		if resp.StatusCode != 403 || !strings.HasPrefix(resp.Header.Get("Proxy-Status"), "vibemaxxer-server; error=destination_ip_prohibited") {
+			t.Errorf("%s: %s %q", host, resp.Status, resp.Header.Get("Proxy-Status"))
+		}
 	}
 }

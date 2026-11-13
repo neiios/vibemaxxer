@@ -70,6 +70,7 @@ let
 
   standaloneRules = pkgs.writeText "filter.rules" ''
     block .blocked.example
+    block localhost 9000
   '';
 
   clientRules = pkgs.writeText "client.rules" ''
@@ -182,10 +183,13 @@ in
     home = {
       imports = [ (publicAddress "home") ];
       environment.systemPackages = [ pkgs.curl ];
-      networking.hosts.${ip.coordinator} = [
-        "direct.example"
-        "blocked.example"
-      ];
+      networking.hosts = {
+        ${ip.coordinator} = [
+          "direct.example"
+          "blocked.example"
+        ];
+        "127.0.0.1" = [ "rebind.example" ];
+      };
       environment.etc."vibemaxxer/id_ed25519" = {
         source = "${secrets}/home";
         mode = "0600";
@@ -265,6 +269,8 @@ in
         assert egress("https://direct.example/", LOCAL_CURL) == HOME
         refused("http://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
         refused("https://x.blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
+        for url in ["http://localhost:9000/", "http://127.0.0.1:9000/", "http://[::1]:9000/", "http://app.localhost:9000/"]:
+            refused(url, 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
         coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
 
     home.systemctl("start frpc.service ssh-tunnel.service")
@@ -293,12 +299,15 @@ in
         coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
         aws.fail("journalctl -u vibemaxxer-server | grep -q blocked.example")
 
-    with subtest("vibemaxxer run reaches loopback directly and proxies the rest"):
-        RUN = "VIBEMAXXER_RUN_SCOPE=1 ${package}/bin/vibemaxxer run -- curl -sS --max-time 60 --cacert ${secrets}/tls.crt"
+    with subtest("vibemaxxer run sends loopback through the client"):
+        RUN = "VIBEMAXXER_RUN_SCOPE=1 NO_PROXY='*' ${package}/bin/vibemaxxer run -- curl -sS --max-time 60 --cacert ${secrets}/tls.crt"
         home.wait_for_open_port(9000)
         for url in ["http://127.0.0.1:9000/", "http://localhost:9000/", "http://[::1]:9000/"]:
             assert home.succeed(f"{RUN} -o /dev/null -w '%{{http_code}}' {url}") == "200", url
+        logs = home.succeed("journalctl -u vibemaxxer-client")
+        assert "host=localhost port=9000 action=direct rule=default status=200" in logs, logs
         refused("https://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", RUN)
+        refused("http://rebind.example:9000/", 403, "vibemaxxer-client; error=destination_ip_prohibited", RUN)
 
     with subtest("AWS policy is enforced independently"):
         refused("https://denied.example/", 403, "vibemaxxer-server; error=http_request_denied")

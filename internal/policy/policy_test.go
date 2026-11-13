@@ -9,16 +9,23 @@ import (
 func TestHost(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{
-		"Example.COM":   "example.com",
-		"example.com.":  "example.com",
-		"xn--bcher-kva": "xn--bcher-kva",
-		"a_b.example":   "a_b.example",
+		"Example.COM":       "example.com",
+		"example.com.":      "example.com",
+		"xn--bcher-kva":     "xn--bcher-kva",
+		"a_b.example":       "a_b.example",
+		"LocalHost.":        "localhost",
+		"app.localhost":     "localhost",
+		"127.0.0.1":         "localhost",
+		"127.4.5.6":         "localhost",
+		"::1":               "localhost",
+		"::ffff:127.0.0.1":  "localhost",
+		"localhost.example": "localhost.example",
 	} {
 		if got, err := Host(in); err != nil || got != want {
 			t.Errorf("Host(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"127.0.0.1", "::1", "fe80::1%eth0", "1.2.3", "example.123"} {
+	for _, in := range []string{"10.0.0.1", "2001:db8::1", "fe80::1%eth0", "0.0.0.0", "::", "127.1", "1.2.3", "example.123"} {
 		if _, err := Host(in); !errors.Is(err, ErrIPLiteral) {
 			t.Errorf("Host(%q) = %v; want ErrIPLiteral", in, err)
 		}
@@ -71,6 +78,54 @@ block  .Tracker.Example.
 	} {
 		if action, rule := p.Decide(c.host, 443); action != c.action || rule != c.rule {
 			t.Errorf("%s: %v %s; want %v %s", c.host, action, rule, c.action, c.rule)
+		}
+	}
+}
+
+func TestPortDecisions(t *testing.T) {
+	t.Parallel()
+	p, err := Parse("client.rules", `
+proxy *
+block localhost 5432,6379
+block .example.com 80
+block .localhost 2375
+`, Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		host   string
+		port   int
+		action Action
+		rule   string
+	}{
+		{"localhost", 5432, Block, "client.rules:3"},
+		{"localhost", 6379, Block, "client.rules:3"},
+		{"localhost", 2375, Block, "client.rules:5"},
+		{"localhost", 3000, Direct, "default"},
+		{"www.example.com", 80, Block, "client.rules:4"},
+		{"www.example.com", 443, Proxy, "client.rules:2"},
+		{"other.test", 5432, Proxy, "client.rules:2"},
+	} {
+		if action, rule := p.Decide(c.host, c.port); action != c.action || rule != c.rule {
+			t.Errorf("%s:%d: %v %s; want %v %s", c.host, c.port, action, rule, c.action, c.rule)
+		}
+	}
+	server, err := Parse("server.rules", "allow * 443,5432\ndeny .internal.example 5432\n", Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		host   string
+		port   int
+		action Action
+	}{
+		{"db.internal.example", 5432, Block},
+		{"db.internal.example", 443, Direct},
+		{"db.other.example", 5432, Direct},
+	} {
+		if action, rule := server.Decide(c.host, c.port); action != c.action {
+			t.Errorf("server %s:%d: %v (%s); want %v", c.host, c.port, action, rule, c.action)
 		}
 	}
 }
@@ -136,8 +191,10 @@ func TestRequiresUpstream(t *testing.T) {
 func TestParseRejects(t *testing.T) {
 	t.Parallel()
 	for mode, lines := range map[Mode][]string{
-		Client: {"allow example.com", "proxy", "proxy example.com 443", "proxy 10.0.0.1", "proxy *.example.com", "block ..example.com", "direct example.com"},
-		Server: {"proxy example.com", "allow example.com 0", "allow example.com 443,", "deny example.com 443", "allow example.com 443 80", "allow ::1"},
+		Client: {"allow example.com", "proxy", "proxy example.com 443", "proxy 10.0.0.1", "proxy *.example.com", "block ..example.com", "direct example.com",
+			"block example.com 0", "block example.com 443 80", "proxy localhost", "proxy .localhost", "block 127.0.0.1", "block ::1 22", "block app.localhost 3000"},
+		Server: {"proxy example.com", "allow example.com 0", "allow example.com 443,", "deny example.com 443 80", "allow example.com 443 80", "allow ::1",
+			"allow localhost", "deny 127.0.0.1", "allow 127.0.0.1 443"},
 	} {
 		for _, line := range lines {
 			if _, err := Parse("rules", line, mode); err == nil || !strings.HasPrefix(err.Error(), "rules:1: ") {

@@ -100,7 +100,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	dial, err := proxy.Dialer(*allowPrivate)
+	dial, err := proxy.Dialer(*allowPrivate, mode == policy.Client)
 	if err != nil {
 		return err
 	}

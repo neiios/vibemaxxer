@@ -125,7 +125,7 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request, attrs *[]any) (in
 	default:
 		return 0, fail(http.StatusServiceUnavailable, "connection_limit_reached", "too many active requests")
 	}
-	host, port, err := destination(r)
+	host, port, address, err := destination(r)
 	if err != nil {
 		*attrs = append(*attrs, "target", r.URL.Host)
 	}
@@ -140,9 +140,11 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request, attrs *[]any) (in
 	if action == policy.Block {
 		return 0, fail(http.StatusForbidden, "http_request_denied", "denied by rule "+rule)
 	}
-	address := net.JoinHostPort(host, strconv.Itoa(port))
 	if r.Method != http.MethodConnect {
-		if port == 80 {
+		switch {
+		case host == policy.Loopback:
+			address = r.URL.Host
+		case port == 80:
 			address = host
 		}
 		return p.forward(w, r, address, action)
@@ -191,15 +193,28 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, address string, 
 	stripHopByHop(resp.Header)
 	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
+	_, err = io.Copy(flusher{w, http.NewResponseController(w)}, resp.Body)
 	return resp.StatusCode, err
 }
 
-func destination(r *http.Request) (string, int, error) {
+type flusher struct {
+	io.Writer
+	controller *http.ResponseController
+}
+
+func (f flusher) Write(p []byte) (int, error) {
+	n, err := f.Writer.Write(p)
+	if err == nil {
+		err = f.controller.Flush()
+	}
+	return n, err
+}
+
+func destination(r *http.Request) (host string, port int, address string, err error) {
 	authority := r.URL.Host
 	if r.Method != http.MethodConnect {
 		if r.URL.Scheme != "http" || authority == "" {
-			return "", 0, errors.New("expected CONNECT or an absolute http:// URL")
+			return "", 0, "", errors.New("expected CONNECT or an absolute http:// URL")
 		}
 		if r.URL.Port() == "" {
 			authority = net.JoinHostPort(r.URL.Hostname(), "80")
@@ -207,14 +222,18 @@ func destination(r *http.Request) (string, int, error) {
 	}
 	name, portText, err := net.SplitHostPort(authority)
 	if err != nil {
-		return "", 0, errors.New("expected HOST:PORT")
+		return "", 0, "", errors.New("expected HOST:PORT")
 	}
-	port, err := policy.Port(portText)
-	if err != nil {
-		return "", 0, err
+	if port, err = policy.Port(portText); err != nil {
+		return "", 0, "", err
 	}
-	host, err := policy.Host(name)
-	return host, port, err
+	if host, err = policy.Host(name); err != nil {
+		return "", 0, "", err
+	}
+	if host != policy.Loopback {
+		name = host
+	}
+	return host, port, net.JoinHostPort(name, portText), nil
 }
 
 func (p *Proxy) reject(w http.ResponseWriter, r *http.Request, f *failure) {

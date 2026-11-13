@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"syscall"
 	"time"
+
+	"github.com/neiios/vibemaxxer/internal/policy"
 )
 
 type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
@@ -50,7 +52,7 @@ func (g guard) allowed(addr netip.Addr) bool {
 	return true
 }
 
-func Dialer(allowPrivate bool) (DialFunc, error) {
+func Dialer(allowPrivate, allowLoopback bool) (DialFunc, error) {
 	g := guard{allowPrivate: allowPrivate}
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -74,5 +76,25 @@ func Dialer(allowPrivate bool) (DialFunc, error) {
 			return nil
 		},
 	}
-	return dialer.DialContext, nil
+	local := net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		name, port, _ := net.SplitHostPort(address)
+		host, _ := policy.Host(name)
+		switch {
+		case host != policy.Loopback:
+			return dialer.DialContext(ctx, network, address)
+		case !allowLoopback:
+			return nil, errProhibited
+		}
+		if _, err := netip.ParseAddr(name); err == nil {
+			return local.DialContext(ctx, network, address)
+		}
+		conn, err := local.DialContext(ctx, network, net.JoinHostPort("127.0.0.1", port))
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			if conn6, err6 := local.DialContext(ctx, network, net.JoinHostPort("::1", port)); err6 == nil {
+				return conn6, nil
+			}
+		}
+		return conn, err
+	}, nil
 }

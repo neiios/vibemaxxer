@@ -70,7 +70,7 @@ parse:
 		}
 		return execCommand(command, os.Environ())
 	}
-	for _, name := range []string{"VIBEMAXXER_RUN_SCOPE", "ALL_PROXY", "all_proxy"} {
+	for _, name := range []string{"VIBEMAXXER_RUN_SCOPE", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		if err := os.Unsetenv(name); err != nil {
 			return err
 		}
@@ -79,12 +79,8 @@ parse:
 	if err := waitForProxy(remote, 100, 200*time.Millisecond); err != nil {
 		return err
 	}
-	proxy, local := "http://127.0.0.1:8080", "localhost,.localhost,127.0.0.1,127.0.0.0/8,::1,[::1]"
-	for name, value := range map[string]string{
-		"HTTP_PROXY": proxy, "HTTPS_PROXY": proxy, "http_proxy": proxy, "https_proxy": proxy,
-		"NO_PROXY": local, "no_proxy": local,
-	} {
-		if err := os.Setenv(name, value); err != nil {
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if err := os.Setenv(name, "http://127.0.0.1:8080"); err != nil {
 			return err
 		}
 	}
