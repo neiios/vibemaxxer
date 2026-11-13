@@ -21,11 +21,13 @@ func (a activity) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func pipe(a net.Conn, aReader io.Reader, b net.Conn, bReader io.Reader, idle time.Duration) {
+func pipe(a net.Conn, aReader io.Reader, b io.ReadWriteCloser, bReader io.Reader, idle time.Duration) {
 	touch := func() {
 		deadline := time.Now().Add(idle)
 		_ = a.SetReadDeadline(deadline)
-		_ = b.SetReadDeadline(deadline)
+		if d, ok := b.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = d.SetReadDeadline(deadline)
+		}
 	}
 	touch()
 	var wg sync.WaitGroup
@@ -34,7 +36,7 @@ func pipe(a net.Conn, aReader io.Reader, b net.Conn, bReader io.Reader, idle tim
 	wg.Wait()
 }
 
-func pipeOneWay(dst net.Conn, src io.Reader, srcConn net.Conn) {
+func pipeOneWay(dst io.WriteCloser, src io.Reader, srcConn io.Closer) {
 	_, err := io.Copy(dst, src)
 	if err == nil {
 		if cw, ok := dst.(interface{ CloseWrite() error }); ok {

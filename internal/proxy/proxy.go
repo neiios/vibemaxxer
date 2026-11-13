@@ -180,7 +180,12 @@ func stripHopByHop(h http.Header) {
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, address string, action policy.Action) (int, error) {
 	out := r.Clone(r.Context())
 	out.URL.Host, out.Host, out.RequestURI, out.Close = address, "", "", false
+	upgrade := upgradeType(r.Header)
 	stripHopByHop(out.Header)
+	if upgrade != "" {
+		out.Header.Set("Connection", "Upgrade")
+		out.Header.Set("Upgrade", upgrade)
+	}
 	transport, classify := p.direct, dialFailure
 	if action == policy.Proxy {
 		transport, classify = p.proxied, upstreamFailure
@@ -190,11 +195,48 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, address string, 
 		return 0, classify(err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return p.switchProtocols(w, resp, upgrade)
+	}
 	stripHopByHop(resp.Header)
 	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(flusher{w, http.NewResponseController(w)}, resp.Body)
 	return resp.StatusCode, err
+}
+
+func upgradeType(h http.Header) string {
+	for _, value := range h.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+				return h.Get("Upgrade")
+			}
+		}
+	}
+	return ""
+}
+
+func (p *Proxy) switchProtocols(w http.ResponseWriter, resp *http.Response, upgrade string) (int, error) {
+	backend, ok := resp.Body.(io.ReadWriteCloser)
+	if !ok || upgrade == "" || !strings.EqualFold(upgradeType(resp.Header), upgrade) {
+		return 0, fail(http.StatusBadGateway, "http_upgrade_failed", "destination switched to an unrequested protocol")
+	}
+	local, buffered, err := http.NewResponseController(w).Hijack()
+	if err != nil {
+		return 0, fail(http.StatusInternalServerError, "proxy_internal_error", err.Error())
+	}
+	defer local.Close()
+	stripHopByHop(resp.Header)
+	resp.Header.Set("Connection", "Upgrade")
+	resp.Header.Set("Upgrade", upgrade)
+	buffered.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	resp.Header.Write(buffered)
+	buffered.WriteString("\r\n")
+	if err := buffered.Flush(); err != nil {
+		return 0, err
+	}
+	pipe(local, buffered.Reader, backend, backend, p.idle)
+	return http.StatusSwitchingProtocols, nil
 }
 
 type flusher struct {

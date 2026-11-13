@@ -102,6 +102,20 @@ func newChain(t *testing.T) *chain {
 	t.Helper()
 	echo := echoServer(t)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if protocol := r.Header.Get("Upgrade"); protocol != "" {
+			conn, buffered, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			if protocol == "wrong" {
+				protocol = "echo"
+			}
+			fmt.Fprintf(buffered, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\nhost=%s\n", protocol, r.Host)
+			buffered.Flush()
+			io.Copy(conn, buffered)
+			return
+		}
 		fmt.Fprintf(w, "host=%s auth=%q", r.Host, r.Header.Get("Proxy-Authorization"))
 	}))
 	t.Cleanup(origin.Close)
@@ -348,6 +362,59 @@ func TestHTTPForwarding(t *testing.T) {
 		if resp.StatusCode/100 != 4 {
 			t.Fatalf("%q: %s", request, resp.Status)
 		}
+	}
+}
+
+func upgrade(t *testing.T, proxy, url, protocol string) (net.Conn, *bufio.Reader, *http.Response) {
+	t.Helper()
+	conn, err := net.Dial("tcp", proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: ignored.test\r\nConnection: keep-alive, Upgrade\r\nUpgrade: %s\r\n\r\n", url, protocol)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return conn, reader, resp
+}
+
+func TestUpgrade(t *testing.T) {
+	t.Parallel()
+	c := newChain(t)
+	for _, tc := range []struct{ url, host string }{
+		{"http://direct.test/ws", "direct.test"},
+		{"http://www.proxied.test/ws", "www.proxied.test"},
+	} {
+		conn, reader, resp := upgrade(t, c.client, tc.url, "echo")
+		if resp.StatusCode != http.StatusSwitchingProtocols || resp.Header.Get("Upgrade") != "echo" || !strings.EqualFold(resp.Header.Get("Connection"), "upgrade") {
+			t.Fatalf("%s: %s %v", tc.url, resp.Status, resp.Header)
+		}
+		if line, err := reader.ReadString('\n'); err != nil || line != "host="+tc.host+"\n" {
+			t.Fatalf("%s: first line %q, %v", tc.url, line, err)
+		}
+		fmt.Fprint(conn, "ping\n")
+		if line, err := reader.ReadString('\n'); err != nil || line != "ping\n" {
+			t.Fatalf("%s: echo %q, %v", tc.url, line, err)
+		}
+	}
+	_, _, resp := upgrade(t, c.client, "http://direct.test/ws", "wrong")
+	if resp.StatusCode != http.StatusBadGateway || !strings.HasPrefix(resp.Header.Get("Proxy-Status"), "vibemaxxer-client; error=http_upgrade_failed") {
+		t.Fatalf("mismatched upgrade: %s %q", resp.Status, resp.Header.Get("Proxy-Status"))
+	}
+	_, idle := c.newClient(t, c.server, 200*time.Millisecond)
+	_, reader, resp := upgrade(t, idle, "http://direct.test/ws", "echo")
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatal(resp.Status)
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadByte(); err != io.EOF {
+		t.Fatalf("idle upgraded connection read: %v", err)
 	}
 }
 
