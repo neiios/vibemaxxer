@@ -608,7 +608,7 @@ func TestGuard(t *testing.T) {
 			t.Errorf("%s: allowed=%v, want %v", addr, got, want)
 		}
 	}
-	dial, err := Dialer(func(string) bool { return true }, false)
+	dial, err := Dialer(false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,7 +659,7 @@ func TestLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(func(string) bool { return false }, true)
+	dial, err := Dialer(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,7 +735,7 @@ func TestServerRefusesLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(func(string) bool { return true }, false)
+	dial, err := Dialer(false)
 	if err != nil {
 		t.Fatal(err)
 	}

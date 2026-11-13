@@ -9,7 +9,6 @@ block .telemetry.example    # never connect
 block localhost 5432,6379   # keep local databases off limits
 proxy .anthropic.com        # send through the server
 proxy api.openai.com
-private nas.home.example    # may resolve to private addresses
 # anything else goes direct
 ```
 
@@ -31,9 +30,6 @@ deny  admin.example.org
 - `allow` checks the port too. Leave the port list off and it allows 443
   only. `block` and `deny` take an optional port list and match every port
   without one. `proxy` doesn't look at the port, since the server does that.
-- `private` doesn't allow or block anything. It lets names it matches reach
-  private addresses, which are otherwise refused (see below). Only client
-  rules have it.
 - Matching ignores case and a trailing dot. Names have to be ASCII, so write
   international domains in punycode (`xn--...`).
 
@@ -71,14 +67,9 @@ machine's own addresses. That covers the cloud metadata addresses,
 `169.254.169.254` and AWS's `fd00:ec2::254`, and names that resolve to your
 own machine.
 
-It also refuses private ranges, CGNAT and the networks the machine is on.
-Names can't reach your router or the rest of your LAN, whatever their DNS
-says.
-
-On the client you can lift this for names you list with `private` rules, and
-`private *` lifts it for every name. That only covers connections the client
-makes itself. The server has no such rule, so nothing sent through it reaches
-the server's own network.
+The server also refuses private ranges, CGNAT and the networks it's on, so
+nothing sent through it reaches the server's own network. The client allows
+them, so programs can reach your LAN and VPN hosts by name.
 
 ## Responses and logs
 
