@@ -1,4 +1,0 @@
-# Allow Anthropic and Claude domains and their subdomains on port 443 only.
-allow .anthropic.com 443
-allow .claude.ai 443
-allow .claude.com 443

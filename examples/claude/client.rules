@@ -2,7 +2,7 @@
 block .http-intake.logs.us5.datadoghq.com
 block .browser-intake-us5-datadoghq.com
 
-# Send Anthropic and Claude domains and their subdomains through the remote server.
+# Send Anthropic and Claude domains and their subdomains through the server.
 proxy .anthropic.com
 proxy .claude.ai
 proxy .claude.com

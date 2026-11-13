@@ -31,4 +31,8 @@ if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] && command -v "$oo7_cli" >/dev/null; th
     unset token
 fi
 
-exec "$vibemaxxer" run -- "$real_claude" "$@"
+run=(run)
+if [[ -n ${VIBEMAXXER_REMOTE:-} ]]; then
+    run+=(--remote)
+fi
+exec "$vibemaxxer" "${run[@]}" -- "$real_claude" "$@"

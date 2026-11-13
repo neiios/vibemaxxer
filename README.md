@@ -57,9 +57,8 @@ There are two ways to connect the two:
 - If they're on different networks, use an SSH forward, optionally through
   frp to get past NAT. See [SSH and frp setup](docs/remote.md).
 
-The [examples](examples/) run Claude Code through vibemaxxer in each mode:
-[local](examples/claude-local/), [LAN](examples/claude-lan/) and
-[remote](examples/claude-remote/).
+The [Claude Code example](examples/claude/) runs Claude Code through
+vibemaxxer in each mode: local, LAN and remote.
 
 ## Caveats
 
