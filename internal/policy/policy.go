@@ -24,10 +24,11 @@ const (
 	Direct Action = iota
 	Proxy
 	Block
+	Private
 )
 
 func (a Action) String() string {
-	return [...]string{"direct", "proxy", "block"}[a]
+	return [...]string{"direct", "proxy", "block", "private"}[a]
 }
 
 var ErrIPLiteral = errors.New("IP literal destinations are not allowed; use a hostname")
@@ -78,13 +79,13 @@ var syntax = [...]struct {
 	actions map[string]Action
 	usage   string
 }{
-	Client: {map[string]Action{"block": Block, "proxy": Proxy}, "block DOMAIN [PORT,...] | proxy DOMAIN"},
-	Server: {map[string]Action{"deny": Block, "allow": Direct}, "deny DOMAIN [PORT,...] | allow DOMAIN [PORT,...]"},
+	Client: {map[string]Action{"block": Block, "proxy": Proxy, "private": Private}, "block DOMAIN [PORT,...] | proxy DOMAIN | private DOMAIN"},
+	Server: {map[string]Action{"deny": Block, "allow": Direct, "private": Private}, "deny DOMAIN [PORT,...] | allow DOMAIN [PORT,...] | private DOMAIN"},
 }
 
 func parseRule(mode Mode, fields []string) (rule, error) {
 	action, ok := syntax[mode].actions[fields[0]]
-	withPorts := action != Proxy
+	withPorts := action == Block || action == Direct
 	if !ok || len(fields) < 2 || len(fields) > 3 || len(fields) == 3 && !withPorts {
 		return rule{}, fmt.Errorf("expected %s", syntax[mode].usage)
 	}
@@ -174,10 +175,14 @@ func (p *Policy) RequiresUpstream() bool {
 	return slices.ContainsFunc(p.rules, func(r rule) bool { return r.action == Proxy })
 }
 
+func (p *Policy) Private(host string) bool {
+	return slices.ContainsFunc(p.rules, func(r rule) bool { return r.action == Private && r.matches(host) })
+}
+
 func (p *Policy) Decide(host string, port int) (Action, string) {
 	match := -1
 	for i, r := range p.rules {
-		if !r.matches(host) || r.ports != nil && !slices.Contains(r.ports, port) {
+		if r.action == Private || !r.matches(host) || r.ports != nil && !slices.Contains(r.ports, port) {
 			continue
 		}
 		if r.action == Block {

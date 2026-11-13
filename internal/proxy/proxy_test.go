@@ -580,29 +580,35 @@ func TestLimits(t *testing.T) {
 
 func TestGuard(t *testing.T) {
 	t.Parallel()
-	g := guard{local: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}}
-	open := guard{allowPrivate: true}
+	g := guard{
+		own:   []netip.Addr{netip.MustParseAddr("198.51.100.4"), netip.MustParseAddr("192.168.1.50")},
+		local: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+	}
 	for addr, want := range map[string][2]bool{
-		"203.0.113.7":      {true, true},
-		"2606:4700::1":     {true, true},
-		"10.1.2.3":         {false, true},
-		"100.64.0.1":       {false, true},
-		"fd12::1":          {false, true},
-		"198.51.100.9":     {false, true},
-		"127.0.0.1":        {false, false},
-		"::ffff:127.0.0.1": {false, false},
-		"169.254.169.254":  {false, false},
-		"fd00:ec2::254":    {false, false},
-		"0.1.2.3":          {false, false},
-		"224.0.0.1":        {false, false},
-		"::":               {false, false},
+		"203.0.113.7":         {true, true},
+		"2606:4700::1":        {true, true},
+		"10.1.2.3":            {false, true},
+		"100.64.0.1":          {false, true},
+		"fd12::1":             {false, true},
+		"198.51.100.9":        {false, true},
+		"192.168.1.20":        {false, true},
+		"198.51.100.4":        {false, false},
+		"192.168.1.50":        {false, false},
+		"::ffff:192.168.1.50": {false, false},
+		"127.0.0.1":           {false, false},
+		"::ffff:127.0.0.1":    {false, false},
+		"169.254.169.254":     {false, false},
+		"fd00:ec2::254":       {false, false},
+		"0.1.2.3":             {false, false},
+		"224.0.0.1":           {false, false},
+		"::":                  {false, false},
 	} {
 		a := netip.MustParseAddr(addr)
-		if got := [2]bool{g.allowed(a), open.allowed(a)}; got != want {
+		if got := [2]bool{g.allowed(a, false), g.allowed(a, true)}; got != want {
 			t.Errorf("%s: allowed=%v, want %v", addr, got, want)
 		}
 	}
-	dial, err := Dialer(true, false)
+	dial, err := Dialer(func(string) bool { return true }, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +659,7 @@ func TestLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(false, true)
+	dial, err := Dialer(func(string) bool { return false }, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +735,7 @@ func TestServerRefusesLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial, err := Dialer(true, false)
+	dial, err := Dialer(func(string) bool { return true }, false)
 	if err != nil {
 		t.Fatal(err)
 	}

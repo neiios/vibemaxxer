@@ -18,6 +18,7 @@ allow .anthropic.com        # port 443 by default
 allow api.openai.com 443
 allow .internal.example 80,443
 deny  admin.internal.example
+private .internal.example   # may resolve to private addresses
 # anything else is denied
 ```
 
@@ -30,6 +31,9 @@ deny  admin.internal.example
 - `allow` checks the port too. Leave the port list off and it allows 443
   only. `block` and `deny` take an optional port list and match every port
   without one. `proxy` doesn't look at the port, since the server does that.
+- `private` doesn't allow or block anything. It lets names it matches reach
+  private addresses, which are otherwise refused (see below). It works the
+  same in both files.
 - Matching ignores case and a trailing dot. Names have to be ASCII, so write
   international domains in punycode (`xn--...`).
 
@@ -62,13 +66,15 @@ Both sides refuse IP literals other than loopback, so programs have to connect
 by hostname.
 
 After DNS, vibemaxxer checks the address it's about to dial. It always refuses
-loopback, link-local, multicast, `0.0.0.0/8` and `fd00:ec2::/32`. That covers
-the cloud metadata addresses, `169.254.169.254` and AWS's `fd00:ec2::254`,
-and public names that resolve to your own machine.
+loopback, link-local, multicast, `0.0.0.0/8`, `fd00:ec2::/32` and the
+machine's own addresses. That covers the cloud metadata addresses,
+`169.254.169.254` and AWS's `fd00:ec2::254`, and names that resolve to your
+own machine.
 
-It also refuses private ranges, CGNAT and the machine's own networks, unless
-you pass `--allow-private`. That's useful on a server that has to reach
-internal services.
+It also refuses private ranges, CGNAT and the networks the machine is on,
+unless the name matches a `private` rule. Names you haven't listed can't
+reach your router or the rest of your LAN, whatever their DNS says.
+`private *` lifts this for every name.
 
 ## Responses and logs
 

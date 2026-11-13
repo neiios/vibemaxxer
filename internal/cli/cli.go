@@ -63,7 +63,6 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	listen := flags.String("listen", defaultListen, "address to listen on")
 	rules := flags.String("rules", "", "rules file (required)")
-	allowPrivate := flags.Bool("allow-private", false, "also allow private, CGNAT and local network destinations")
 	var lan lanOptions
 	lan.flags(flags, mode)
 	var upstream string
@@ -100,7 +99,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	if err != nil {
 		return err
 	}
-	dial, err := proxy.Dialer(*allowPrivate, mode == policy.Client)
+	dial, err := proxy.Dialer(pol.Private, mode == policy.Client)
 	if err != nil {
 		return err
 	}
@@ -131,7 +130,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 	} else if upstream != "" {
 		transport = "ssh-forward"
 	}
-	logger.Info("listening", "mode", name, "address", listener.Addr(), "rules", *rules, "upstream", upstream, "transport", transport, "allow_private", *allowPrivate)
+	logger.Info("listening", "mode", name, "address", listener.Addr(), "rules", *rules, "upstream", upstream, "transport", transport)
 	return p.Server().Serve(listener)
 }
 

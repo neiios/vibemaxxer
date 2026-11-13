@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"syscall"
 	"time"
 
@@ -24,13 +25,13 @@ var (
 )
 
 type guard struct {
-	allowPrivate bool
-	local        []netip.Prefix
+	own   []netip.Addr
+	local []netip.Prefix
 }
 
-func (g guard) allowed(addr netip.Addr) bool {
+func (g guard) allowed(addr netip.Addr, private bool) bool {
 	addr = addr.Unmap().WithZone("")
-	if !addr.IsGlobalUnicast() {
+	if !addr.IsGlobalUnicast() || slices.Contains(g.own, addr) {
 		return false
 	}
 	for _, prefix := range alwaysRefused {
@@ -38,7 +39,7 @@ func (g guard) allowed(addr netip.Addr) bool {
 			return false
 		}
 	}
-	if g.allowPrivate {
+	if private {
 		return true
 	}
 	if addr.IsPrivate() || sharedAddressSpace.Contains(addr) {
@@ -52,8 +53,8 @@ func (g guard) allowed(addr netip.Addr) bool {
 	return true
 }
 
-func Dialer(allowPrivate, allowLoopback bool) (DialFunc, error) {
-	g := guard{allowPrivate: allowPrivate}
+func Dialer(private func(host string) bool, allowLoopback bool) (DialFunc, error) {
+	var g guard
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil, err
@@ -63,26 +64,32 @@ func Dialer(allowPrivate, allowLoopback bool) (DialFunc, error) {
 		if err != nil {
 			return nil, err
 		}
+		g.own = append(g.own, prefix.Addr().Unmap().WithZone(""))
 		g.local = append(g.local, prefix.Masked())
 	}
-	dialer := net.Dialer{
-		Timeout:   dialTimeout,
-		KeepAlive: 30 * time.Second,
-		ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
-			endpoint, err := netip.ParseAddrPort(address)
-			if err != nil || !g.allowed(endpoint.Addr()) {
-				return errProhibited
-			}
-			return nil
-		},
+	guarded := func(private bool) net.Dialer {
+		return net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: 30 * time.Second,
+			ControlContext: func(_ context.Context, _, address string, _ syscall.RawConn) error {
+				endpoint, err := netip.ParseAddrPort(address)
+				if err != nil || !g.allowed(endpoint.Addr(), private) {
+					return errProhibited
+				}
+				return nil
+			},
+		}
 	}
+	public, internal := guarded(false), guarded(true)
 	local := net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		name, port, _ := net.SplitHostPort(address)
 		host, _ := policy.Host(name)
 		switch {
+		case host != policy.Loopback && host != "" && private(host):
+			return internal.DialContext(ctx, network, address)
 		case host != policy.Loopback:
-			return dialer.DialContext(ctx, network, address)
+			return public.DialContext(ctx, network, address)
 		case !allowLoopback:
 			return nil, errProhibited
 		}
