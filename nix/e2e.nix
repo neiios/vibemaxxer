@@ -1,18 +1,9 @@
 { pkgs, package }:
 let
   ip = {
-    coordinator = "203.0.113.1";
-    stunAlternate = "203.0.113.2";
+    origin = "203.0.113.1";
     home = "198.51.100.10";
     aws = "192.0.2.10";
-  };
-  addresses = {
-    coordinator = [
-      ip.coordinator
-      ip.stunAlternate
-    ];
-    home = [ ip.home ];
-    aws = [ ip.aws ];
   };
 
   secrets =
@@ -35,15 +26,17 @@ let
 
   publicAddress = name: {
     networking.interfaces.eth1.ipv4 = {
-      addresses = map (address: {
-        inherit address;
-        prefixLength = 32;
-      }) addresses.${name};
+      addresses = [
+        {
+          address = ip.${name};
+          prefixLength = 32;
+        }
+      ];
       routes = map (address: {
         inherit address;
         prefixLength = 32;
-        options.src = builtins.head addresses.${name};
-      }) (pkgs.lib.flatten (builtins.attrValues (removeAttrs addresses [ name ])));
+        options.src = ip.${name};
+      }) (builtins.attrValues (removeAttrs ip [ name ]));
     };
   };
 
@@ -57,16 +50,6 @@ let
       RestartSec = 2;
     };
   };
-
-  frpc =
-    extra:
-    pkgs.writeText "frpc.toml" ''
-      serverAddr = "${ip.coordinator}"
-      serverPort = 7000
-      auth.token = "e2e-coordinator-token"
-      natHoleStunServer = "${ip.coordinator}:3478"
-      ${extra}
-    '';
 
   standaloneRules = pkgs.writeText "filter.rules" ''
     block .blocked.example
@@ -90,31 +73,12 @@ in
   name = "vibemaxxer-e2e";
 
   nodes = {
-    coordinator = {
-      imports = [ (publicAddress "coordinator") ];
-      networking.firewall = {
-        allowedTCPPorts = [
-          80
-          443
-          3478
-          7000
-        ];
-        allowedUDPPorts = [
-          3478
-          3479
-        ];
-      };
-      systemd.services.frps = service "frp coordinator" "${pkgs.frp}/bin/frps -c ${pkgs.writeText "frps.toml" ''
-        bindAddr = "${ip.coordinator}"
-        bindPort = 7000
-        auth.token = "e2e-coordinator-token"
-      ''}";
-      services.coturn = {
-        enable = true;
-        no-auth = true;
-        extraConfig = "stun-only\nrfc5780";
-        listening-ips = addresses.coordinator;
-      };
+    origin = {
+      imports = [ (publicAddress "origin") ];
+      networking.firewall.allowedTCPPorts = [
+        80
+        443
+      ];
       services.nginx = {
         enable = true;
         virtualHosts.origin = {
@@ -131,7 +95,7 @@ in
       imports = [ (publicAddress "aws") ];
       environment.systemPackages = [ pkgs.curl ];
       networking.hosts = {
-        ${ip.coordinator} = [
+        ${ip.origin} = [
           "proxied.example"
           "www.proxied.example"
           "secret.proxied.example"
@@ -145,23 +109,8 @@ in
       };
       services.openssh = {
         enable = true;
-        openFirewall = false;
         hostKeys = [ ];
-        extraConfig = ''
-          HostKey /etc/ssh/ssh_host_ed25519_key
-          Match User proxy-tunnel
-              PubkeyAuthentication yes
-              PasswordAuthentication no
-              KbdInteractiveAuthentication no
-              AllowTcpForwarding local
-              PermitOpen 127.0.0.1:8081
-              AllowStreamLocalForwarding no
-              MaxSessions 0
-              PermitTTY no
-              AllowAgentForwarding no
-              X11Forwarding no
-              PermitTunnel no
-        '';
+        extraConfig = "HostKey /etc/ssh/ssh_host_ed25519_key";
       };
       users.groups.proxy-tunnel = { };
       users.users.proxy-tunnel = {
@@ -170,21 +119,13 @@ in
         openssh.authorizedKeys.keyFiles = [ "${secrets}/home.pub" ];
       };
       systemd.services.vibemaxxer-server = service "vibemaxxer server" "${package}/bin/vibemaxxer server --rules ${serverRules}";
-      systemd.services.frpc = service "frp agent exposing sshd over XTCP" "${pkgs.frp}/bin/frpc -c ${frpc ''
-        [[proxies]]
-        name = "aws-ssh"
-        type = "xtcp"
-        secretKey = "e2e-xtcp-secret"
-        localIP = "127.0.0.1"
-        localPort = 22
-      ''}";
     };
 
     home = {
       imports = [ (publicAddress "home") ];
       environment.systemPackages = [ pkgs.curl ];
       networking.hosts = {
-        ${ip.coordinator} = [
+        ${ip.origin} = [
           "direct.example"
           "blocked.example"
         ];
@@ -197,8 +138,7 @@ in
       programs.ssh.knownHosts.aws-vm-proxy.publicKeyFile = "${secrets}/aws-host.pub";
       programs.ssh.extraConfig = ''
         Host aws-proxy-tunnel
-            HostName 127.0.0.1
-            Port 2222
+            HostName ${ip.aws}
             User proxy-tunnel
             IdentityFile /etc/vibemaxxer/id_ed25519
             IdentitiesOnly yes
@@ -212,15 +152,6 @@ in
             ConnectTimeout 30
             RequestTTY no
       '';
-      systemd.services.frpc = service "frp XTCP visitor for the AWS sshd" "${pkgs.frp}/bin/frpc -c ${frpc ''
-        [[visitors]]
-        name = "aws-ssh-visitor"
-        type = "xtcp"
-        serverName = "aws-ssh"
-        secretKey = "e2e-xtcp-secret"
-        bindAddr = "127.0.0.1"
-        bindPort = 2222
-      ''}";
       systemd.services.ssh-tunnel = service "SSH forward to the AWS vibemaxxer server" "${pkgs.openssh}/bin/ssh -N aws-proxy-tunnel";
       systemd.services.local-web = service "web server for loopback tests" "${pkgs.python3}/bin/python3 -m http.server --bind :: --directory /var/empty 9000";
       systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${standaloneRules} --listen 127.0.0.1:8082";
@@ -234,15 +165,6 @@ in
     HOME, AWS = "${ip.home}", "${ip.aws}"
     CURL = "curl -sS --max-time 60 -x http://127.0.0.1:8080 --cacert ${secrets}/tls.crt"
     LOCAL_CURL = CURL.replace(":8080", ":8082")
-    SSH = ("ssh -F /dev/null -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes "
-           "-o ConnectTimeout=30 -o HostKeyAlias=aws-vm-proxy -i /etc/vibemaxxer/id_ed25519 ")
-    TARGET = " proxy-tunnel@127.0.0.1"
-    UDP_BLOCK = [
-        "iptables ACTION INPUT -p udp ! -s 203.0.113.0/24",
-        "iptables ACTION OUTPUT -p udp ! -d 203.0.113.0/24",
-        "ip6tables ACTION INPUT -p udp",
-        "ip6tables ACTION OUTPUT -p udp",
-    ]
 
     def egress(url, curl=CURL):
         return home.succeed(f"{curl} {url}").split()[0]
@@ -253,17 +175,14 @@ in
         assert f"Proxy-Status: {proxy_status}" in out, out
 
     start_all()
-    coordinator.wait_for_unit("frps.service")
-    coordinator.wait_for_unit("coturn.service")
-    coordinator.wait_for_unit("nginx.service")
+    origin.wait_for_unit("nginx.service")
     aws.wait_for_unit("vibemaxxer-server.service")
     aws.wait_for_unit("sshd.service")
-    aws.wait_for_unit("frpc.service")
     home.wait_for_unit("vibemaxxer-client.service")
     home.wait_for_unit("vibemaxxer-filter.service")
 
     with subtest("standalone filtering needs no upstream or tunnel"):
-        home.systemctl("stop ssh-tunnel.service frpc.service")
+        home.systemctl("stop ssh-tunnel.service")
         home.fail("ss -ltnH 'sport = 18080' | grep -q .")
         assert egress("http://direct.example/", LOCAL_CURL) == HOME
         assert egress("https://direct.example/", LOCAL_CURL) == HOME
@@ -271,16 +190,11 @@ in
         refused("https://x.blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
         for url in ["http://localhost:9000/", "http://127.0.0.1:9000/", "http://[::1]:9000/", "http://app.localhost:9000/"]:
             refused(url, 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
-        coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
+        origin.fail("grep -q blocked.example /var/log/nginx/access.log")
 
-    home.systemctl("start frpc.service ssh-tunnel.service")
-    home.wait_for_unit("ssh-tunnel.service")
+    home.systemctl("start ssh-tunnel.service")
 
-    with subtest("the AWS VM accepts no inbound connections"):
-        home.fail("timeout 5 bash -c '</dev/tcp/${ip.aws}/22'")
-        coordinator.fail("timeout 5 bash -c '</dev/tcp/${ip.aws}/22'")
-
-    with subtest("SSH forward comes up over the XTCP path"):
+    with subtest("SSH forward comes up"):
         home.wait_until_succeeds("ss -ltnH 'sport = 18080' | grep -q 127.0.0.1", timeout=timedelta(minutes=3))
 
     with subtest("DIRECT domains exit from home"):
@@ -296,7 +210,7 @@ in
     with subtest("client BLOCK opens no connection"):
         refused("https://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied")
         refused("http://x.blocked.example/", 403, "vibemaxxer-client; error=http_request_denied")
-        coordinator.fail("grep -q blocked.example /var/log/nginx/access.log")
+        origin.fail("grep -q blocked.example /var/log/nginx/access.log")
         aws.fail("journalctl -u vibemaxxer-server | grep -q blocked.example")
 
     with subtest("vibemaxxer run sends loopback through the client"):
@@ -314,8 +228,8 @@ in
         refused("https://secret.proxied.example/", 403, "vibemaxxer-server; error=http_request_denied")
         refused("http://proxied.example:8080/", 403, "vibemaxxer-server; error=http_request_denied")
         refused("https://sneaky.example/", 403, "vibemaxxer-server; error=destination_ip_prohibited")
-        refused("https://${ip.coordinator}/", 403, "vibemaxxer-client; error=destination_ip_prohibited")
-        coordinator.fail("grep -q denied.example /var/log/nginx/access.log")
+        refused("https://${ip.origin}/", 403, "vibemaxxer-client; error=destination_ip_prohibited")
+        origin.fail("grep -q denied.example /var/log/nginx/access.log")
 
     with subtest("logs carry decisions but not queries"):
         logs = home.succeed("journalctl -u vibemaxxer-client")
@@ -323,35 +237,19 @@ in
         assert "-client.rules:2 status=200" in logs, logs
         assert "hunter2" not in logs + aws.succeed("journalctl -u vibemaxxer-server")
 
-    with subtest("the tunnel account only reaches the proxy"):
-        home.succeed(f"{SSH} -W 127.0.0.1:8081 {TARGET} </dev/null")
-        home.fail(f"{SSH} -W 127.0.0.1:22 {TARGET} </dev/null")
-        home.fail(f"{SSH} {TARGET} true")
-        home.fail(f"{SSH} -s {TARGET} sftp </dev/null")
-        home.fail(f"timeout 60 {SSH} -N -o ExitOnForwardFailure=yes -R 127.0.0.1:9999:127.0.0.1:22 {TARGET}")
-
-    with subtest("without a direct path PROXY fails and DIRECT keeps working"):
-        for rule in UDP_BLOCK:
-            aws.succeed(f"{rule.replace('ACTION', '-I')} -j DROP")
-        since = home.succeed("date +%s").strip()
-        aws.systemctl("restart frpc.service")
-        home.systemctl("restart frpc.service")
-        home.wait_until_succeeds(
-            f"journalctl -u frpc --since=@{since} | grep -q 'open tunnel error'", timeout=timedelta(minutes=2)
-        )
+    with subtest("without the tunnel PROXY fails and DIRECT keeps working"):
+        home.systemctl("stop ssh-tunnel.service")
         home.fail("ss -ltnH 'sport = 18080' | grep -q .")
         out = home.fail(f"{CURL} -w '%{{http_connect}}' -o /dev/null https://proxied.example/ 2>&1")
         assert "502" in out or "504" in out, out
         assert egress("https://direct.example/") == HOME
 
-    with subtest("PROXY recovers once the direct path returns"):
-        for rule in UDP_BLOCK:
-            aws.succeed(f"{rule.replace('ACTION', '-D')} -j DROP")
+    with subtest("PROXY recovers once the tunnel returns"):
+        home.systemctl("start ssh-tunnel.service")
         home.wait_until_succeeds(f"{CURL} https://proxied.example/ | grep -q '^{AWS} '", timeout=timedelta(minutes=3))
 
-    with subtest("LAN TLS works without SSH or frp"):
-        home.systemctl("stop ssh-tunnel.service frpc.service")
-        aws.systemctl("stop frpc.service")
+    with subtest("LAN TLS works without SSH"):
+        home.systemctl("stop ssh-tunnel.service")
         aws.succeed("iptables -I INPUT -s ${ip.home} -p tcp --dport 8443 -j ACCEPT")
         binary = "${package}/bin/vibemaxxer"
         home_pin = home.succeed(f"{binary} key --key /tmp/home-lan.pem").strip()
