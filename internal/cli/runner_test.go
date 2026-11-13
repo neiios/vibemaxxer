@@ -47,22 +47,22 @@ exec "$@"
 	return cmd, argsFile
 }
 
-func runnerListener(t *testing.T, address string) *net.TCPListener {
+func runnerListener(t *testing.T) (*net.TCPListener, string) {
 	t.Helper()
-	listener, err := net.Listen("tcp", address)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Skipf("runner uses fixed address %s: %v", address, err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { listener.Close() })
-	return listener.(*net.TCPListener)
+	return listener.(*net.TCPListener), listener.Addr().String()
 }
 
 func TestRunnerModes(t *testing.T) {
-	runnerListener(t, "127.0.0.1:9878")
-	upstream := runnerListener(t, "127.0.0.1:19878")
+	_, proxy := runnerListener(t)
+	upstream, tunnel := runnerListener(t)
 	for _, remote := range []bool{false, true} {
 		name, target := "local", "vibemaxxer.target"
-		var args []string
+		args := []string{"--proxy", proxy, "--tunnel", tunnel}
 		if remote {
 			name, target = "remote", "vibemaxxer-remote.target"
 			args = append(args, "--remote")
@@ -75,7 +75,7 @@ func TestRunnerModes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runner: %v\n%s", err, out)
 			}
-			want := strings.Repeat("http://127.0.0.1:9878\n", 4) +
+			want := strings.Repeat("http://"+proxy+"\n", 4) +
 				"unset\nunset\nunset\nunset\nunset\n--remote\nargument with spaces\nliteral $value\n"
 			if string(out) != want {
 				t.Fatalf("command environment/arguments = %q, want %q", out, want)
@@ -84,9 +84,9 @@ func TestRunnerModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, property := range []string{"Wants=", "After="} {
-				if !strings.Contains(string(invocation), "\n"+property+target+"\n") {
-					t.Fatalf("missing %s%s in systemd-run arguments: %s", property, target, invocation)
+			for _, property := range []string{"Wants=" + target, "After=" + target, "--proxy\n" + proxy, "--tunnel\n" + tunnel} {
+				if !strings.Contains(string(invocation), "\n"+property+"\n") {
+					t.Fatalf("missing %q in systemd-run arguments: %s", property, invocation)
 				}
 			}
 			_ = upstream.SetDeadline(time.Now().Add(100 * time.Millisecond))
@@ -105,21 +105,21 @@ func TestRunnerModes(t *testing.T) {
 }
 
 func TestRunnerLocalWithoutTunnel(t *testing.T) {
-	runnerListener(t, "127.0.0.1:9878")
-	upstream := runnerListener(t, "127.0.0.1:19878")
+	_, proxy := runnerListener(t)
+	upstream, tunnel := runnerListener(t)
 	upstream.Close()
-	cmd, _ := runnerCommand(t, "bash", "-c", "printf ran")
+	cmd, _ := runnerCommand(t, "--proxy", proxy, "--tunnel", tunnel, "bash", "-c", "printf ran")
 	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "ran" {
 		t.Fatalf("local runner without tunnel: %q, %v", out, err)
 	}
-	if err := waitForProxy(true, 1, 0); err == nil || !strings.Contains(err.Error(), "proxy or tunnel is not up") {
+	if err := waitForProxy(proxy, tunnel, 1, 0); err == nil || !strings.Contains(err.Error(), "proxy or tunnel is not up") {
 		t.Fatalf("remote runner without tunnel: %v", err)
 	}
 }
 
 func TestRunnerExitStatus(t *testing.T) {
-	runnerListener(t, "127.0.0.1:9878")
-	cmd, _ := runnerCommand(t, "bash", "-c", "exit 42")
+	_, proxy := runnerListener(t)
+	cmd, _ := runnerCommand(t, "--proxy", proxy, "bash", "-c", "exit 42")
 	out, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 42 {
 		t.Fatalf("exit status not preserved: %q, %v", out, err)
@@ -127,26 +127,39 @@ func TestRunnerExitStatus(t *testing.T) {
 }
 
 func TestRunnerMissingProxy(t *testing.T) {
-	listener := runnerListener(t, "127.0.0.1:9878")
+	listener, proxy := runnerListener(t)
 	listener.Close()
-	if err := waitForProxy(false, 1, 0); err == nil || !strings.Contains(err.Error(), "proxy is not up") {
+	if err := waitForProxy(proxy, "", 1, 0); err == nil || !strings.Contains(err.Error(), "proxy is not up") {
 		t.Fatalf("missing proxy: %v", err)
 	}
 }
 
 func TestRunnerUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"--remote"}, {"--"}, {"--unknown"}} {
-		cmd, argsFile := runnerCommand(t, args...)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "see vibemaxxer run --help"},
+		{[]string{"--remote"}, "see vibemaxxer run --help"},
+		{[]string{"--"}, "see vibemaxxer run --help"},
+		{[]string{"--unknown"}, "see vibemaxxer run --help"},
+		{[]string{"--proxy", "192.0.2.1:9878", "true"}, "--proxy must be a loopback"},
+		{[]string{"--tunnel", "localhost:19878", "true"}, "--tunnel must be a loopback"},
+	} {
+		cmd, argsFile := runnerCommand(t, tc.args...)
 		out, err := cmd.CombinedOutput()
 		if _, statErr := os.Stat(argsFile); !os.IsNotExist(statErr) {
 			t.Errorf("invalid invocation started a scope: %v", statErr)
 		}
-		if err == nil || !strings.Contains(string(out), "see vibemaxxer run --help") {
-			t.Errorf("%v: %q, %v", args, out, err)
+		if err == nil || !strings.Contains(string(out), tc.want) {
+			t.Errorf("%v: %q, %v", tc.args, out, err)
 		}
 	}
 	cmd, _ := runnerCommand(t, "--help")
-	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "[--remote]") {
-		t.Errorf("help: %q, %v", out, err)
+	out, err := cmd.CombinedOutput()
+	for _, want := range []string{"--remote", "--proxy ADDR", "(default 127.0.0.1:9878)", "(default 127.0.0.1:19878)"} {
+		if err != nil || !strings.Contains(string(out), want) {
+			t.Errorf("help is missing %q: %q, %v", want, out, err)
+		}
 	}
 }

@@ -187,6 +187,8 @@ Then run things with `--remote`:
 vibemaxxer run --remote claude
 ```
 
-The tunnel stays up as long as any `--remote` command is running. Commands
+If your SSH forward uses a different local port, pass it with `--tunnel`, such
+as `vibemaxxer run --remote --tunnel 127.0.0.1:2080 claude`. The tunnel stays
+up as long as any `--remote` command is running. Commands
 started without `--remote` still share the client, but their proxied requests
 fail while the tunnel is down.

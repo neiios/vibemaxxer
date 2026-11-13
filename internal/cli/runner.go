@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const runnerHeader = `Usage: vibemaxxer run [--remote] [--] COMMAND [ARG...]
+const runnerHeader = `Usage: vibemaxxer run [OPTION...] [--] COMMAND [ARG...]
 
 Starts the proxy, runs COMMAND through it, and stops the proxy when
 the last command exits. It needs the systemd user units described in
@@ -18,18 +18,26 @@ docs/run.md.`
 
 func runCommand(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	remoteFlag := flags.Bool("remote", false, "also start the SSH tunnel")
+	remote := flags.Bool("remote", false, "also start the SSH tunnel")
+	proxy := flags.String("proxy", "127.0.0.1:9878", "use the client listening on `ADDR`")
+	tunnel := flags.String("tunnel", "127.0.0.1:19878", "with --remote, wait for the SSH forward at `ADDR`")
 	if err := parseOptions(flags, runnerHeader, args); err != nil {
 		return err
 	}
-	remote, args := *remoteFlag, flags.Args()
+	args = flags.Args()
 	if len(args) == 0 {
 		return errors.New("missing COMMAND; see vibemaxxer run --help")
+	}
+	if err := loopback("--proxy", *proxy); err != nil {
+		return err
+	}
+	if err := loopback("--tunnel", *tunnel); err != nil {
+		return err
 	}
 
 	if os.Getenv("VIBEMAXXER_RUN_SCOPE") == "" {
 		target := "vibemaxxer.target"
-		if remote {
+		if *remote {
 			target = "vibemaxxer-remote.target"
 		}
 		self, err := os.Executable()
@@ -37,8 +45,9 @@ func runCommand(args []string) error {
 			return err
 		}
 		command := []string{"systemd-run", "--user", "--scope", "--quiet",
-			"-p", "Wants=" + target, "-p", "After=" + target, "--", self, "run"}
-		if remote {
+			"-p", "Wants=" + target, "-p", "After=" + target, "--",
+			self, "run", "--proxy", *proxy, "--tunnel", *tunnel}
+		if *remote {
 			command = append(command, "--remote")
 		}
 		command = append(command, "--")
@@ -54,18 +63,22 @@ func runCommand(args []string) error {
 		}
 	}
 
-	if err := waitForProxy(remote, 100, 200*time.Millisecond); err != nil {
+	wait := ""
+	if *remote {
+		wait = *tunnel
+	}
+	if err := waitForProxy(*proxy, wait, 100, 200*time.Millisecond); err != nil {
 		return err
 	}
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		if err := os.Setenv(name, "http://127.0.0.1:9878"); err != nil {
+		if err := os.Setenv(name, "http://"+*proxy); err != nil {
 			return err
 		}
 	}
 	return execCommand(args, os.Environ())
 }
 
-func waitForProxy(remote bool, attempts int, delay time.Duration) error {
+func waitForProxy(proxy, tunnel string, attempts int, delay time.Duration) error {
 	ready := func(address string) bool {
 		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 		if err != nil {
@@ -75,12 +88,12 @@ func waitForProxy(remote bool, attempts int, delay time.Duration) error {
 		return true
 	}
 	for range attempts {
-		if ready("127.0.0.1:9878") && (!remote || ready("127.0.0.1:19878")) {
+		if ready(proxy) && (tunnel == "" || ready(tunnel)) {
 			return nil
 		}
 		time.Sleep(delay)
 	}
-	if remote {
+	if tunnel != "" {
 		return errors.New("proxy or tunnel is not up; see journalctl --user -u \"vibemaxxer-*\"")
 	}
 	return errors.New("proxy is not up; see journalctl --user -u vibemaxxer-client")
