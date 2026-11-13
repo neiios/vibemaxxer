@@ -58,7 +58,7 @@ func runCommand(args []string) error {
 		return err
 	}
 	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		if err := os.Setenv(name, "http://127.0.0.1:8080"); err != nil {
+		if err := os.Setenv(name, "http://127.0.0.1:9878"); err != nil {
 			return err
 		}
 	}
@@ -75,7 +75,7 @@ func waitForProxy(remote bool, attempts int, delay time.Duration) error {
 		return true
 	}
 	for range attempts {
-		if ready("127.0.0.1:8080") && (!remote || ready("127.0.0.1:18080")) {
+		if ready("127.0.0.1:9878") && (!remote || ready("127.0.0.1:19878")) {
 			return nil
 		}
 		time.Sleep(delay)

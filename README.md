@@ -30,7 +30,7 @@ Then, in another terminal, set the proxy variables and run something through
 it:
 
 ```sh
-export HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:9878 HTTP_PROXY=http://127.0.0.1:9878
 curl https://example.com
 ```
 

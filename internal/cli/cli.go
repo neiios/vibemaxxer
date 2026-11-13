@@ -48,7 +48,7 @@ func Run(logger *slog.Logger, args []string) error {
 	case "key":
 		return keyCommand(args[1:])
 	case "client":
-		return run(logger, "client", policy.Client, "127.0.0.1:8080", args[1:])
+		return run(logger, "client", policy.Client, "127.0.0.1:9878", args[1:])
 	case "server":
 		return run(logger, "server", policy.Server, "127.0.0.1:8081", args[1:])
 	case "help", "-h", "-help", "--help":
@@ -128,7 +128,7 @@ func run(logger *slog.Logger, name string, mode policy.Mode, defaultListen strin
 func loopback(flagName, value string) error {
 	addr, err := netip.ParseAddrPort(value)
 	if err != nil || !addr.Addr().IsLoopback() || addr.Port() == 0 {
-		return fmt.Errorf("%s must be a loopback IP:PORT such as 127.0.0.1:8080", flagName)
+		return fmt.Errorf("%s must be a loopback IP:PORT such as 127.0.0.1:9878", flagName)
 	}
 	return nil
 }

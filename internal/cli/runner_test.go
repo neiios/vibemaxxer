@@ -58,8 +58,8 @@ func runnerListener(t *testing.T, address string) *net.TCPListener {
 }
 
 func TestRunnerModes(t *testing.T) {
-	runnerListener(t, "127.0.0.1:8080")
-	upstream := runnerListener(t, "127.0.0.1:18080")
+	runnerListener(t, "127.0.0.1:9878")
+	upstream := runnerListener(t, "127.0.0.1:19878")
 	for _, remote := range []bool{false, true} {
 		name, target := "local", "vibemaxxer.target"
 		var args []string
@@ -75,7 +75,7 @@ func TestRunnerModes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("runner: %v\n%s", err, out)
 			}
-			want := strings.Repeat("http://127.0.0.1:8080\n", 4) +
+			want := strings.Repeat("http://127.0.0.1:9878\n", 4) +
 				"unset\nunset\nunset\nunset\nunset\n--remote\nargument with spaces\nliteral $value\n"
 			if string(out) != want {
 				t.Fatalf("command environment/arguments = %q, want %q", out, want)
@@ -105,8 +105,8 @@ func TestRunnerModes(t *testing.T) {
 }
 
 func TestRunnerLocalWithoutTunnel(t *testing.T) {
-	runnerListener(t, "127.0.0.1:8080")
-	upstream := runnerListener(t, "127.0.0.1:18080")
+	runnerListener(t, "127.0.0.1:9878")
+	upstream := runnerListener(t, "127.0.0.1:19878")
 	upstream.Close()
 	cmd, _ := runnerCommand(t, "bash", "-c", "printf ran")
 	if out, err := cmd.CombinedOutput(); err != nil || string(out) != "ran" {
@@ -118,7 +118,7 @@ func TestRunnerLocalWithoutTunnel(t *testing.T) {
 }
 
 func TestRunnerExitStatus(t *testing.T) {
-	runnerListener(t, "127.0.0.1:8080")
+	runnerListener(t, "127.0.0.1:9878")
 	cmd, _ := runnerCommand(t, "bash", "-c", "exit 42")
 	out, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 42 {
@@ -127,7 +127,7 @@ func TestRunnerExitStatus(t *testing.T) {
 }
 
 func TestRunnerMissingProxy(t *testing.T) {
-	listener := runnerListener(t, "127.0.0.1:8080")
+	listener := runnerListener(t, "127.0.0.1:9878")
 	listener.Close()
 	if err := waitForProxy(false, 1, 0); err == nil || !strings.Contains(err.Error(), "proxy is not up") {
 		t.Fatalf("missing proxy: %v", err)

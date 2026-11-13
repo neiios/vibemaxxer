@@ -5,7 +5,7 @@ same network. The two connect over TLS 1.3, and each checks the other's key
 against a fingerprint you pinned. There's no CA, SSH or frp involved.
 
 ```text
-app -> client 127.0.0.1:8080 -> mutual TLS -> server 192.168.1.50:8443 -> internet
+app -> client 127.0.0.1:9878 -> mutual TLS -> server 192.168.1.50:8443 -> internet
 ```
 
 ## 1. Exchange fingerprints

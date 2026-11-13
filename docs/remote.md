@@ -12,7 +12,7 @@ If you can reach the VM's SSH port directly, you don't need frp at all. Skip
 the frp parts and put the VM's real address in the SSH config below.
 
 ```text
-app -> client :8080 -> ssh forward :18080 === frp xtcp ===> sshd -> server :8081 -> internet
+app -> client :9878 -> ssh forward :19878 === frp xtcp ===> sshd -> server :8081 -> internet
 ```
 
 The examples below use `frp.example.net` as the coordinator.
@@ -126,7 +126,7 @@ Host vm-proxy-tunnel
     HostKeyAlias vm-proxy
     StrictHostKeyChecking yes
     BatchMode yes
-    LocalForward 127.0.0.1:18080 127.0.0.1:8081
+    LocalForward 127.0.0.1:19878 127.0.0.1:8081
     ExitOnForwardFailure yes
     ServerAliveInterval 30
     ServerAliveCountMax 3
@@ -135,7 +135,7 @@ Host vm-proxy-tunnel
 Now start `frpc`, `ssh -N vm-proxy-tunnel` and the client:
 
 ```sh
-vibemaxxer client --rules client.rules --upstream 127.0.0.1:18080
+vibemaxxer client --rules client.rules --upstream 127.0.0.1:19878
 ```
 
 If the tunnel drops, proxied requests fail and direct traffic keeps working.
@@ -146,7 +146,7 @@ its own traffic through vibemaxxer.
 
 If you want `vibemaxxer run --remote` to bring the tunnel up and down for you,
 set up the units from [vibemaxxer run](run.md), add `--upstream
-127.0.0.1:18080` to the client's `ExecStart`, and create these three units:
+127.0.0.1:19878` to the client's `ExecStart`, and create these three units:
 
 ```ini
 # ~/.config/systemd/user/vibemaxxer-remote.target

@@ -63,11 +63,11 @@ func TestLANFlagPolicy(t *testing.T) {
 		{"client", []string{"--server", "192.0.2.1:8443"}},
 		{"client", []string{"--server-key", pin}},
 		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", "bad"}},
-		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--upstream", "127.0.0.1:18080"}},
+		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--upstream", "127.0.0.1:19878"}},
 		{"client", []string{"--server", "192.0.2.1", "--server-key", pin}},
 		{"client", []string{"--server", ":8443", "--server-key", pin}},
 		{"client", []string{"--server", "192.0.2.1:0", "--server-key", pin}},
-		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--listen", "192.0.2.2:8080"}},
+		{"client", []string{"--server", "192.0.2.1:8443", "--server-key", pin, "--listen", "192.0.2.2:9878"}},
 		{"server", []string{"--client-key", "bad"}},
 	} {
 		rules := clientRules

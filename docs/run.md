@@ -41,7 +41,7 @@ codex() { vibemaxxer run codex "$@"; }
 ```
 
 The command gets `HTTP_PROXY`, `HTTPS_PROXY` and their lowercase forms set to
-`http://127.0.0.1:8080`. `NO_PROXY`, `ALL_PROXY` and their lowercase forms are
+`http://127.0.0.1:9878`. `NO_PROXY`, `ALL_PROXY` and their lowercase forms are
 removed, so old values can't send traffic around the proxy. That includes
 traffic to your own machine, which the client connects to itself so that
 [rules](rules.md#your-own-machine) like `block localhost 5432` apply.

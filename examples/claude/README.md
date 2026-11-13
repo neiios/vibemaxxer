@@ -59,7 +59,7 @@ install -m644 examples/claude/client.rules ~/.config/vibemaxxer/
 ```
 
 ```ini
-ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --upstream 127.0.0.1:18080
+ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --upstream 127.0.0.1:19878
 ```
 
 ## Run

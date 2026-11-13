@@ -145,7 +145,7 @@ in
             HostKeyAlias aws-vm-proxy
             StrictHostKeyChecking yes
             BatchMode yes
-            LocalForward 127.0.0.1:18080 127.0.0.1:8081
+            LocalForward 127.0.0.1:19878 127.0.0.1:8081
             ExitOnForwardFailure yes
             ServerAliveInterval 5
             ServerAliveCountMax 2
@@ -155,7 +155,7 @@ in
       systemd.services.ssh-tunnel = service "SSH forward to the AWS vibemaxxer server" "${pkgs.openssh}/bin/ssh -N aws-proxy-tunnel";
       systemd.services.local-web = service "web server for loopback tests" "${pkgs.python3}/bin/python3 -m http.server --bind :: --directory /var/empty 9000";
       systemd.services.vibemaxxer-filter = service "standalone vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${standaloneRules} --listen 127.0.0.1:8082";
-      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${clientRules} --upstream 127.0.0.1:18080";
+      systemd.services.vibemaxxer-client = service "vibemaxxer client" "${package}/bin/vibemaxxer client --rules ${clientRules} --upstream 127.0.0.1:19878";
     };
   };
 
@@ -163,8 +163,8 @@ in
     from datetime import timedelta
 
     HOME, AWS = "${ip.home}", "${ip.aws}"
-    CURL = "curl -sS --max-time 60 -x http://127.0.0.1:8080 --cacert ${secrets}/tls.crt"
-    LOCAL_CURL = CURL.replace(":8080", ":8082")
+    CURL = "curl -sS --max-time 60 -x http://127.0.0.1:9878 --cacert ${secrets}/tls.crt"
+    LOCAL_CURL = CURL.replace(":9878", ":8082")
 
     def egress(url, curl=CURL):
         return home.succeed(f"{curl} {url}").split()[0]
@@ -183,7 +183,7 @@ in
 
     with subtest("standalone filtering needs no upstream or tunnel"):
         home.systemctl("stop ssh-tunnel.service")
-        home.fail("ss -ltnH 'sport = 18080' | grep -q .")
+        home.fail("ss -ltnH 'sport = 19878' | grep -q .")
         assert egress("http://direct.example/", LOCAL_CURL) == HOME
         assert egress("https://direct.example/", LOCAL_CURL) == HOME
         refused("http://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", LOCAL_CURL)
@@ -195,7 +195,7 @@ in
     home.systemctl("start ssh-tunnel.service")
 
     with subtest("SSH forward comes up"):
-        home.wait_until_succeeds("ss -ltnH 'sport = 18080' | grep -q 127.0.0.1", timeout=timedelta(minutes=3))
+        home.wait_until_succeeds("ss -ltnH 'sport = 19878' | grep -q 127.0.0.1", timeout=timedelta(minutes=3))
 
     with subtest("DIRECT domains exit from home"):
         assert egress("https://direct.example/") == HOME
@@ -239,7 +239,7 @@ in
 
     with subtest("without the tunnel PROXY fails and DIRECT keeps working"):
         home.systemctl("stop ssh-tunnel.service")
-        home.fail("ss -ltnH 'sport = 18080' | grep -q .")
+        home.fail("ss -ltnH 'sport = 19878' | grep -q .")
         out = home.fail(f"{CURL} -w '%{{http_connect}}' -o /dev/null https://proxied.example/ 2>&1")
         assert "502" in out or "504" in out, out
         assert egress("https://direct.example/") == HOME
@@ -261,7 +261,7 @@ in
                      f"--listen 127.0.0.1:8083 --key /tmp/home-lan.pem --server {AWS}:8443 "
                      f"--server-key {aws_pin} --rules ${clientRules}")
         home.wait_for_open_port(8083)
-        LAN_CURL = CURL.replace(":8080", ":8083")
+        LAN_CURL = CURL.replace(":9878", ":8083")
         home.fail("getent hosts proxied.example")
         assert egress("https://proxied.example/", LAN_CURL) == AWS
         assert egress("http://www.proxied.example/", LAN_CURL) == AWS
@@ -277,7 +277,7 @@ in
                          f"--listen 127.0.0.1:8084 --key {key} --server {AWS}:8443 "
                          f"--server-key {pin} --rules ${clientRules}")
             home.wait_for_open_port(8084)
-            bad_curl = CURL.replace(":8080", ":8084")
+            bad_curl = CURL.replace(":9878", ":8084")
             refused("https://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", bad_curl)
             refused("http://proxied.example/", 502, "vibemaxxer-client; error=destination_unavailable", bad_curl)
             assert egress("https://direct.example/", bad_curl) == HOME
