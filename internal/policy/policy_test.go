@@ -132,35 +132,32 @@ block .localhost 2375
 
 func TestPrivate(t *testing.T) {
 	t.Parallel()
-	for mode, rules := range map[Mode]string{
-		Client: "private .lan.example\nprivate nas.test\nblock .lan.example 22\n",
-		Server: "private .lan.example\nprivate nas.test\nallow .lan.example 443\n",
+	p, err := Parse("rules", "private .lan.example\nprivate nas.test\nblock .lan.example 22\n", Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]bool{
+		"lan.example": true, "db.lan.example": true, "nas.test": true,
+		"sub.nas.test": false, "example.com": false,
 	} {
-		p, err := Parse("rules", rules, mode)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for host, want := range map[string]bool{
-			"lan.example": true, "db.lan.example": true, "nas.test": true,
-			"sub.nas.test": false, "example.com": false,
-		} {
-			if got := p.Private(host); got != want {
-				t.Errorf("mode %d: Private(%q) = %v, want %v", mode, host, got, want)
-			}
-		}
-		if p.RequiresUpstream() {
-			t.Errorf("mode %d: private rules require an upstream", mode)
+		if got := p.Private(host); got != want {
+			t.Errorf("Private(%q) = %v, want %v", host, got, want)
 		}
 	}
-	client, _ := Parse("rules", "private .lan.example\nblock .lan.example 22\n", Client)
+	if p.RequiresUpstream() {
+		t.Error("private rules require an upstream")
+	}
 	for port, want := range map[int]Action{22: Block, 443: Direct} {
-		if action, _ := client.Decide("db.lan.example", port); action != want {
-			t.Errorf("client db.lan.example:%d = %v, want %v", port, action, want)
+		if action, _ := p.Decide("db.lan.example", port); action != want {
+			t.Errorf("db.lan.example:%d = %v, want %v", port, action, want)
 		}
 	}
-	server, _ := Parse("rules", "private .lan.example\n", Server)
-	if action, rule := server.Decide("db.lan.example", 443); action != Block || rule != "default" {
-		t.Errorf("private alone allowed the server to connect: %v %s", action, rule)
+	server, err := Parse("rules", "allow *\n", Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Private("db.lan.example") {
+		t.Error("server policy lets a name reach private addresses")
 	}
 }
 
@@ -228,7 +225,7 @@ func TestParseRejects(t *testing.T) {
 		Client: {"allow example.com", "proxy", "proxy example.com 443", "proxy 10.0.0.1", "proxy *.example.com", "block ..example.com", "direct example.com",
 			"block example.com 0", "block example.com 443 80", "proxy localhost", "private", "private example.com 443", "private localhost", "private 10.0.0.1", "proxy .localhost", "block 127.0.0.1", "block ::1 22", "block app.localhost 3000"},
 		Server: {"proxy example.com", "allow example.com 0", "allow example.com 443,", "deny example.com 443 80", "allow example.com 443 80", "allow ::1",
-			"allow localhost", "private", "private example.com 443", "private localhost", "deny 127.0.0.1", "allow 127.0.0.1 443"},
+			"allow localhost", "private", "private example.com", "private .example.com", "private *", "private example.com 443", "private localhost", "deny 127.0.0.1", "allow 127.0.0.1 443"},
 	} {
 		for _, line := range lines {
 			if _, err := Parse("rules", line, mode); err == nil || !strings.HasPrefix(err.Error(), "rules:1: ") {

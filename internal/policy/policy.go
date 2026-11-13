@@ -80,7 +80,7 @@ var syntax = [...]struct {
 	usage   string
 }{
 	Client: {map[string]Action{"block": Block, "proxy": Proxy, "private": Private}, "block DOMAIN [PORT,...] | proxy DOMAIN | private DOMAIN"},
-	Server: {map[string]Action{"deny": Block, "allow": Direct, "private": Private}, "deny DOMAIN [PORT,...] | allow DOMAIN [PORT,...] | private DOMAIN"},
+	Server: {map[string]Action{"deny": Block, "allow": Direct}, "deny DOMAIN [PORT,...] | allow DOMAIN [PORT,...]"},
 }
 
 func parseRule(mode Mode, fields []string) (rule, error) {

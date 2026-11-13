@@ -9,6 +9,7 @@ block .telemetry.example    # never connect
 block localhost 5432,6379   # keep local databases off limits
 proxy .anthropic.com        # send through the server
 proxy api.openai.com
+private nas.home.example    # may resolve to private addresses
 # anything else goes direct
 ```
 
@@ -16,9 +17,8 @@ proxy api.openai.com
 # server.rules
 allow .anthropic.com        # port 443 by default
 allow api.openai.com 443
-allow .internal.example 80,443
-deny  admin.internal.example
-private .internal.example   # may resolve to private addresses
+allow .example.org 80,443
+deny  admin.example.org
 # anything else is denied
 ```
 
@@ -32,8 +32,8 @@ private .internal.example   # may resolve to private addresses
   only. `block` and `deny` take an optional port list and match every port
   without one. `proxy` doesn't look at the port, since the server does that.
 - `private` doesn't allow or block anything. It lets names it matches reach
-  private addresses, which are otherwise refused (see below). It works the
-  same in both files.
+  private addresses, which are otherwise refused (see below). Only client
+  rules have it.
 - Matching ignores case and a trailing dot. Names have to be ASCII, so write
   international domains in punycode (`xn--...`).
 
@@ -71,10 +71,14 @@ machine's own addresses. That covers the cloud metadata addresses,
 `169.254.169.254` and AWS's `fd00:ec2::254`, and names that resolve to your
 own machine.
 
-It also refuses private ranges, CGNAT and the networks the machine is on,
-unless the name matches a `private` rule. Names you haven't listed can't
-reach your router or the rest of your LAN, whatever their DNS says.
-`private *` lifts this for every name.
+It also refuses private ranges, CGNAT and the networks the machine is on.
+Names can't reach your router or the rest of your LAN, whatever their DNS
+says.
+
+On the client you can lift this for names you list with `private` rules, and
+`private *` lifts it for every name. That only covers connections the client
+makes itself. The server has no such rule, so nothing sent through it reaches
+the server's own network.
 
 ## Responses and logs
 
