@@ -173,6 +173,36 @@ func TestRunnerProxyLivesWithCommand(t *testing.T) {
 	}
 }
 
+func TestRunnerLogsConnectionsOpenAtExit(t *testing.T) {
+	r := newRunner(t)
+	origin, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer origin.Close()
+	go func() {
+		for {
+			conn, err := origin.Accept()
+			if err != nil {
+				return
+			}
+			go io.Copy(io.Discard, conn)
+		}
+	}()
+	port := strconv.Itoa(origin.Addr().(*net.TCPAddr).Port)
+	out, err := r.script(t, `exec 3<>/dev/tcp/127.0.0.1/"${HTTP_PROXY##*:}"; printf 'CONNECT localhost:%s HTTP/1.1\r\n\r\n' "$1" >&3; read -r status <&3; echo "${status%$'\r'}"`, port).Output()
+	if err != nil || string(out) != "HTTP/1.1 200 Connection Established\n" {
+		t.Fatalf("tunnel: %q, %v", out, err)
+	}
+	log, err := os.ReadFile(r.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "method=CONNECT host=localhost port=" + port + " action=direct rule=default status=200"; !strings.Contains(string(log), want) {
+		t.Fatalf("log is missing %q:\n%s", want, log)
+	}
+}
+
 func TestRunnerNesting(t *testing.T) {
 	r := newRunner(t)
 	other := filepath.Join(r.dir, "other")

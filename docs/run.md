@@ -74,6 +74,9 @@ command name:
 time=... level=INFO msg=request pid=4242 command=claude method=CONNECT host=api.anthropic.com port=443 action=direct rule=default status=200 duration=1.2s
 ```
 
+A request is logged when it finishes. Connections the command still has open
+when it exits are logged as it exits.
+
 When the file is larger than 10 MiB at the start of a run, it's renamed to
 `run.log.1` first, replacing the previous one.
 

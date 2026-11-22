@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -35,8 +36,9 @@ A run started from inside another run with the same rules and upstream
 shares the outer proxy.`
 
 const (
-	runMarker  = "VIBEMAXXER_RUN"
-	maxLogSize = 10 << 20
+	runMarker    = "VIBEMAXXER_RUN"
+	maxLogSize   = 10 << 20
+	drainTimeout = 500 * time.Millisecond
 )
 
 type exitStatus int
@@ -95,12 +97,15 @@ func runCommand(args []string) error {
 		return err
 	}
 	identity := "/" + hex.EncodeToString(nonce) + "/" + digest
+	var requests sync.WaitGroup
 	server := p.Server()
 	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Host == "" && r.URL.Path == identity {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
+		requests.Add(1)
+		defer requests.Done()
 		p.ServeHTTP(w, r)
 	})
 	go server.Serve(listener)
@@ -113,9 +118,23 @@ func runCommand(args []string) error {
 		return err
 	}
 	logger.Info("listening", "mode", "run", "address", address, "rules", opts.rules, "upstream", cmp.Or(opts.lan.server, opts.upstream), "transport", opts.transport())
-	err = supervise(path, command, os.Environ())
-	logger.Info("exited", "status", err)
-	return err
+	status, err := supervise(path, command, os.Environ())
+	if err != nil {
+		return err
+	}
+	listener.Close()
+	finished := make(chan struct{})
+	go func() { requests.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(drainTimeout):
+	}
+	if status.Signaled() {
+		logger.Info("exited", "signal", status.Signal())
+		return dieFrom(status.Signal())
+	}
+	logger.Info("exited", "status", status.ExitStatus())
+	return exitStatus(status.ExitStatus())
 }
 
 func (o *options) digest() (string, error) {
@@ -186,7 +205,7 @@ func openLog(path, command string) (*slog.Logger, error) {
 	return slog.New(slog.NewTextHandler(out, nil)).With("pid", os.Getpid(), "command", filepath.Base(command)), nil
 }
 
-func supervise(path string, args, env []string) error {
+func supervise(path string, args, env []string) (syscall.WaitStatus, error) {
 	runtime.LockOSThread()
 	signals := make(chan os.Signal, 16)
 	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2,
@@ -197,7 +216,7 @@ func supervise(path string, args, env []string) error {
 		Sys:   &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM},
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	go func() {
 		for sig := range signals {
@@ -218,14 +237,12 @@ func supervise(path string, args, env []string) error {
 		switch {
 		case errors.Is(err, syscall.EINTR):
 		case err != nil:
-			return err
+			return 0, err
 		case status.Stopped():
 			_ = syscall.Kill(syscall.Getpid(), syscall.SIGSTOP)
 			_ = syscall.Kill(pid, syscall.SIGCONT)
-		case status.Signaled():
-			return dieFrom(status.Signal())
-		case status.Exited():
-			return exitStatus(status.ExitStatus())
+		default:
+			return status, nil
 		}
 	}
 }
