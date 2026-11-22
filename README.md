@@ -36,8 +36,16 @@ curl https://example.com
 
 Blocked hosts get a 403 and everything else connects directly, including
 services on your own machine like a dev server or a local MCP server.
-[Rules](docs/rules.md) has the full syntax, and [vibemaxxer run](docs/run.md)
-shows how to start the proxy only when a command needs it.
+[Rules](docs/rules.md) has the full syntax.
+
+If you only want the proxy around one program, skip the two terminals:
+
+```sh
+vibemaxxer run --rules client.rules curl https://example.com
+```
+
+[vibemaxxer run](docs/run.md) starts a proxy for that command alone and stops
+it when the command exits.
 
 ## Routing through another machine
 

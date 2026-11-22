@@ -14,9 +14,7 @@ mkdir -p ~/.local/bin ~/.config/vibemaxxer
 go build -o ~/.local/bin/vibemaxxer ./cmd/vibemaxxer
 ```
 
-Then create the systemd units from [vibemaxxer run](../../docs/run.md), with
-`ExecStart` pointing at `%h/.local/bin/vibemaxxer`. Pick one of the setups
-below for the rules and the rest of `ExecStart`.
+Then pick one of the setups below.
 
 ### Local
 
@@ -42,45 +40,33 @@ service manager. On your workstation:
 
 ```sh
 install -m644 examples/claude/client.rules ~/.config/vibemaxxer/
-```
-
-```ini
-ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT
+export VIBEMAXXER_OPTIONS="--server 192.168.1.50:8443 --server-key SERVER_FINGERPRINT"
 ```
 
 ### Remote
 
-Follow [SSH and frp setup](../../docs/remote.md), including the
-[on-demand units](../../docs/remote.md#on-demand), and use `server.rules` on
-the VM. On your machine:
+Follow [SSH and frp setup](../../docs/remote.md) and use `server.rules` on the
+VM. On your machine, bring up frpc and the SSH forward, then:
 
 ```sh
 install -m644 examples/claude/client.rules ~/.config/vibemaxxer/
-```
-
-```ini
-ExecStart=%h/.local/bin/vibemaxxer client --rules %h/.config/vibemaxxer/client.rules --upstream 127.0.0.1:19878
+export VIBEMAXXER_OPTIONS="--upstream 127.0.0.1:19878"
 ```
 
 ## Run
 
 ```sh
 examples/claude/bin/claude
-VIBEMAXXER_REMOTE=1 examples/claude/bin/claude   # remote setup
 ```
 
-The wrapper runs `~/.local/bin/claude` through `vibemaxxer run`, and with
-`VIBEMAXXER_REMOTE` set it uses `vibemaxxer run --remote`, which brings the
-tunnel up first. When the last Claude session exits, systemd stops the proxy
-and the tunnel again. If the server or tunnel is down, Claude's API requests
-fail rather than going out directly.
+The wrapper runs `~/.local/bin/claude` through
+[`vibemaxxer run`](../../docs/run.md) with `~/.config/vibemaxxer/client.rules`
+and whatever is in `VIBEMAXXER_OPTIONS`. Each Claude session gets its own
+proxy, which stops when the session exits. If the server or tunnel is down,
+Claude's API requests fail rather than going out directly.
 
-Set `CLAUDE_REAL_BINARY` or `VIBEMAXXER_BINARY` if your binaries live somewhere
-else. The wrapper also turns off Claude's telemetry, error reporting and
-background tasks. And if `CLAUDE_CODE_OAUTH_TOKEN` isn't set but `oo7-cli` is
-installed, it reads the token from the `service=claude-code account=oauth-token`
-entry.
-
-If you don't use systemd, run `vibemaxxer client` with the same options, bring
-the tunnel up yourself for the remote setup, and set the proxy variables like
-in the [quick start](../../README.md#quick-start).
+Set `CLAUDE_REAL_BINARY`, `VIBEMAXXER_BINARY` or `VIBEMAXXER_RULES` if your
+files live somewhere else. The wrapper also turns off Claude's telemetry,
+error reporting and background tasks. And if `CLAUDE_CODE_OAUTH_TOKEN` isn't
+set but `oo7-cli` is installed, it reads the token from the
+`service=claude-code account=oauth-token` entry.

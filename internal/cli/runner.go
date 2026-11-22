@@ -1,108 +1,252 @@
 package cli
 
 import (
+	"cmp"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
+	"log/slog"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
+	"unsafe"
+
+	"github.com/neiios/vibemaxxer/internal/policy"
 )
 
-const runnerHeader = `Usage: vibemaxxer run [OPTION...] [--] COMMAND [ARG...]
+const runnerHeader = `Usage: vibemaxxer run --rules FILE [OPTION...] [--] COMMAND [ARG...]
 
-Starts the proxy, runs COMMAND through it, and stops the proxy when
-the last command exits. It needs the systemd user units described in
-docs/run.md.`
+Starts a proxy on a free loopback port, runs COMMAND through it, and
+exits with COMMAND's status. The proxy lives exactly as long as COMMAND.
+A run started from inside another run with the same rules and upstream
+shares the outer proxy.`
+
+const (
+	runMarker  = "VIBEMAXXER_RUN"
+	maxLogSize = 10 << 20
+)
+
+type exitStatus int
+
+func (e exitStatus) Error() string { return "exit status " + strconv.Itoa(int(e)) }
 
 func runCommand(args []string) error {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
-	remote := flags.Bool("remote", false, "also start the SSH tunnel")
-	proxy := flags.String("proxy", "127.0.0.1:9878", "use the client listening on `ADDR`")
-	tunnel := flags.String("tunnel", "127.0.0.1:19878", "with --remote, wait for the SSH forward at `ADDR`")
+	var opts options
+	opts.flags(flags, policy.Client)
+	logPath := flags.String("log", defaultLogPath(), "append the request log to `FILE`")
 	if err := parseOptions(flags, runnerHeader, args); err != nil {
 		return err
 	}
-	args = flags.Args()
-	if len(args) == 0 {
+	command := flags.Args()
+	if len(command) == 0 {
 		return errors.New("missing COMMAND; see vibemaxxer run --help")
 	}
-	if err := loopback("--proxy", *proxy); err != nil {
+	if err := opts.validate(); err != nil {
 		return err
 	}
-	if err := loopback("--tunnel", *tunnel); err != nil {
+	path, err := exec.LookPath(command[0])
+	if err != nil {
 		return err
 	}
-
-	if os.Getenv("VIBEMAXXER_RUN_SCOPE") == "" {
-		target := "vibemaxxer.target"
-		if *remote {
-			target = "vibemaxxer-remote.target"
-		}
-		self, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		command := []string{"systemd-run", "--user", "--scope", "--quiet",
-			"-p", "Wants=" + target, "-p", "After=" + target, "--",
-			self, "run", "--proxy", *proxy, "--tunnel", *tunnel}
-		if *remote {
-			command = append(command, "--remote")
-		}
-		command = append(command, "--")
-		command = append(command, args...)
-		if err := os.Setenv("VIBEMAXXER_RUN_SCOPE", "1"); err != nil {
-			return err
-		}
-		return execCommand(command, os.Environ())
+	digest, err := opts.digest()
+	if err != nil {
+		return err
 	}
-	for _, name := range []string{"VIBEMAXXER_RUN_SCOPE", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
+	for _, name := range []string{"ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
 		if err := os.Unsetenv(name); err != nil {
 			return err
 		}
 	}
-
-	wait := ""
-	if *remote {
-		wait = *tunnel
-	}
-	if err := waitForProxy(*proxy, wait, 100, 200*time.Millisecond); err != nil {
-		return err
-	}
-	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		if err := os.Setenv(name, "http://"+*proxy); err != nil {
+	if address, ok := outerProxy(os.Getenv(runMarker), digest); ok {
+		if err := setProxy(address); err != nil {
 			return err
 		}
+		return syscall.Exec(path, command, os.Environ())
 	}
-	return execCommand(args, os.Environ())
-}
 
-func waitForProxy(proxy, tunnel string, attempts int, delay time.Duration) error {
-	ready := func(address string) bool {
-		conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
-		if err != nil {
-			return false
-		}
-		conn.Close()
-		return true
-	}
-	for range attempts {
-		if ready(proxy) && (tunnel == "" || ready(tunnel)) {
-			return nil
-		}
-		time.Sleep(delay)
-	}
-	if tunnel != "" {
-		return errors.New("proxy or tunnel is not up; see journalctl --user -u \"vibemaxxer-*\"")
-	}
-	return errors.New("proxy is not up; see journalctl --user -u vibemaxxer-client")
-}
-
-func execCommand(args, env []string) error {
-	path, err := exec.LookPath(args[0])
+	logger, err := openLog(*logPath, command[0])
 	if err != nil {
 		return err
 	}
-	return syscall.Exec(path, args, env)
+	p, _, err := opts.proxy("client", policy.Client, logger)
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return err
+	}
+	identity := "/" + hex.EncodeToString(nonce) + "/" + digest
+	server := p.Server()
+	server.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Host == "" && r.URL.Path == identity {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		p.ServeHTTP(w, r)
+	})
+	go server.Serve(listener)
+
+	address := listener.Addr().String()
+	if err := setProxy(address); err != nil {
+		return err
+	}
+	if err := os.Setenv(runMarker, address+"/"+hex.EncodeToString(nonce)); err != nil {
+		return err
+	}
+	logger.Info("listening", "mode", "run", "address", address, "rules", opts.rules, "upstream", cmp.Or(opts.lan.server, opts.upstream), "transport", opts.transport())
+	err = supervise(path, command, os.Environ())
+	logger.Info("exited", "status", err)
+	return err
+}
+
+func (o *options) digest() (string, error) {
+	rules, err := os.ReadFile(o.rules)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	for _, part := range [][]byte{rules, []byte(o.upstream), []byte(o.lan.server), []byte(o.lan.serverKey), []byte(o.lan.key)} {
+		fmt.Fprintf(hash, "%d:", len(part))
+		hash.Write(part)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func outerProxy(marker, digest string) (string, bool) {
+	address, nonce, ok := strings.Cut(marker, "/")
+	if !ok || loopback(runMarker, address) != nil {
+		return "", false
+	}
+	client := http.Client{Timeout: time.Second, Transport: &http.Transport{}}
+	resp, err := client.Get((&url.URL{Scheme: "http", Host: address, Path: "/" + nonce + "/" + digest}).String())
+	if err != nil {
+		return "", false
+	}
+	resp.Body.Close()
+	return address, resp.StatusCode == http.StatusNoContent
+}
+
+func setProxy(address string) error {
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if err := os.Setenv(name, "http://"+address); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func defaultLogPath() string {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if !filepath.IsAbs(dir) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		dir = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(dir, "vibemaxxer", "run.log")
+}
+
+func openLog(path, command string) (*slog.Logger, error) {
+	var out io.Writer = io.Discard
+	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return nil, err
+		}
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() > maxLogSize {
+			if err := os.Rename(path, path+".1"); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+		if err != nil {
+			return nil, err
+		}
+		out = file
+	}
+	return slog.New(slog.NewTextHandler(out, nil)).With("pid", os.Getpid(), "command", filepath.Base(command)), nil
+}
+
+func supervise(path string, args, env []string) error {
+	runtime.LockOSThread()
+	signals := make(chan os.Signal, 16)
+	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2,
+		syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU)
+	pid, err := syscall.ForkExec(path, args, &syscall.ProcAttr{
+		Env:   env,
+		Files: []uintptr{0, 1, 2},
+		Sys:   &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM},
+	})
+	if err != nil {
+		return err
+	}
+	go func() {
+		for sig := range signals {
+			switch sig := sig.(syscall.Signal); sig {
+			case syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU:
+			case syscall.SIGINT, syscall.SIGQUIT:
+				if !inForeground() {
+					_ = syscall.Kill(pid, sig)
+				}
+			default:
+				_ = syscall.Kill(pid, sig)
+			}
+		}
+	}()
+	for {
+		var status syscall.WaitStatus
+		_, err := syscall.Wait4(pid, &status, syscall.WUNTRACED, nil)
+		switch {
+		case errors.Is(err, syscall.EINTR):
+		case err != nil:
+			return err
+		case status.Stopped():
+			_ = syscall.Kill(syscall.Getpid(), syscall.SIGSTOP)
+			_ = syscall.Kill(pid, syscall.SIGCONT)
+		case status.Signaled():
+			return dieFrom(status.Signal())
+		case status.Exited():
+			return exitStatus(status.ExitStatus())
+		}
+	}
+}
+
+func inForeground() bool {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDONLY|syscall.O_NOCTTY, 0)
+	if err != nil {
+		return false
+	}
+	defer tty.Close()
+	var foreground int32
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, tty.Fd(), syscall.TIOCGPGRP, uintptr(unsafe.Pointer(&foreground)))
+	return errno == 0 && int(foreground) == syscall.Getpgrp()
+}
+
+func dieFrom(sig syscall.Signal) error {
+	switch sig {
+	case syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL:
+		signal.Reset(sig)
+		_ = syscall.Kill(syscall.Getpid(), sig)
+		time.Sleep(time.Second)
+	}
+	return exitStatus(128 + int(sig))
 }

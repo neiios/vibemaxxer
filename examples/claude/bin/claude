@@ -5,6 +5,7 @@ readlink=readlink
 oo7_cli=oo7-cli
 vibemaxxer=${VIBEMAXXER_BINARY:-"$HOME/.local/bin/vibemaxxer"}
 real_claude=${CLAUDE_REAL_BINARY:-"$HOME/.local/bin/claude"}
+rules=${VIBEMAXXER_RULES:-"$HOME/.config/vibemaxxer/client.rules"}
 
 [[ -x "$real_claude" ]] || {
     printf 'Missing Claude executable: %s\n' "$real_claude" >&2
@@ -31,8 +32,5 @@ if [[ -z ${CLAUDE_CODE_OAUTH_TOKEN:-} ]] && command -v "$oo7_cli" >/dev/null; th
     unset token
 fi
 
-run=(run)
-if [[ -n ${VIBEMAXXER_REMOTE:-} ]]; then
-    run+=(--remote)
-fi
-exec "$vibemaxxer" "${run[@]}" -- "$real_claude" "$@"
+read -r -a options <<<"${VIBEMAXXER_OPTIONS:-}"
+exec "$vibemaxxer" run --rules "$rules" "${options[@]}" -- "$real_claude" "$@"

@@ -142,53 +142,14 @@ If the tunnel drops, proxied requests fail and direct traffic keeps working.
 Don't start frpc from a shell that has the proxy variables set, or it'll send
 its own traffic through vibemaxxer.
 
-## On demand
+## One command at a time
 
-If you want `vibemaxxer run --remote` to bring the tunnel up and down for you,
-set up the units from [vibemaxxer run](run.md), add `--upstream
-127.0.0.1:19878` to the client's `ExecStart`, and create these three units:
-
-```ini
-# ~/.config/systemd/user/vibemaxxer-remote.target
-[Unit]
-StopWhenUnneeded=yes
-Wants=vibemaxxer.target vibemaxxer-frpc.service vibemaxxer-ssh.service
-```
-
-```ini
-# ~/.config/systemd/user/vibemaxxer-frpc.service
-[Unit]
-PartOf=vibemaxxer-remote.target
-StopWhenUnneeded=yes
-
-[Service]
-ExecStart=/usr/bin/frpc -c %h/.config/vibemaxxer/frpc.toml
-Restart=on-failure
-RestartSec=1
-```
-
-```ini
-# ~/.config/systemd/user/vibemaxxer-ssh.service
-[Unit]
-PartOf=vibemaxxer-remote.target
-StopWhenUnneeded=yes
-After=vibemaxxer-frpc.service
-StartLimitIntervalSec=0
-
-[Service]
-ExecStart=/usr/bin/ssh -N vm-proxy-tunnel
-Restart=always
-RestartSec=1
-```
-
-Then run things with `--remote`:
+Once frpc and the SSH forward are up, [vibemaxxer run](run.md) can take the
+place of the client for a single command:
 
 ```sh
-vibemaxxer run --remote claude
+vibemaxxer run --rules client.rules --upstream 127.0.0.1:19878 claude
 ```
 
-If your SSH forward uses a different local port, pass it with `--tunnel`, such
-as `vibemaxxer run --remote --tunnel 127.0.0.1:2080 claude`. The tunnel stays
-up as long as any `--remote` command is running. Commands
-started without `--remote` still share the client, but their proxied requests
-fail while the tunnel is down.
+It doesn't start the tunnel for you. If the forward is down, proxied requests
+fail and direct traffic keeps working, as with the client.

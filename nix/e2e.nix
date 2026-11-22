@@ -213,15 +213,20 @@ in
         origin.fail("grep -q blocked.example /var/log/nginx/access.log")
         aws.fail("journalctl -u vibemaxxer-server | grep -q blocked.example")
 
-    with subtest("vibemaxxer run sends loopback through the client"):
-        RUN = "VIBEMAXXER_RUN_SCOPE=1 NO_PROXY='*' ${package}/bin/vibemaxxer run -- curl -sS --max-time 60 --cacert ${secrets}/tls.crt"
+    with subtest("vibemaxxer run serves its own proxy for one command"):
+        RUN = "NO_PROXY='*' ${package}/bin/vibemaxxer run --rules ${clientRules} --upstream 127.0.0.1:19878 --log /tmp/run.log -- curl -sS --max-time 60 --cacert ${secrets}/tls.crt"
         home.wait_for_open_port(9000)
         for url in ["http://127.0.0.1:9000/", "http://localhost:9000/", "http://[::1]:9000/"]:
             assert home.succeed(f"{RUN} -o /dev/null -w '%{{http_code}}' {url}") == "200", url
-        logs = home.succeed("journalctl -u vibemaxxer-client")
-        assert "host=localhost port=9000 action=direct rule=default status=200" in logs, logs
+        assert egress("https://direct.example/", RUN) == HOME
+        assert egress("https://www.proxied.example/", RUN) == AWS
         refused("https://blocked.example/", 403, "vibemaxxer-client; error=http_request_denied", RUN)
         refused("http://rebind.example:9000/", 403, "vibemaxxer-client; error=destination_ip_prohibited", RUN)
+        logs = home.succeed("cat /tmp/run.log")
+        assert "command=curl method=GET host=localhost port=9000 action=direct rule=default status=200" in logs, logs
+        assert "command=curl method=CONNECT host=blocked.example port=443 action=block rule=/nix/store/" in logs, logs
+        home.fail("ss -ltnpH | grep -v -e :9878 -e :8082 | grep vibemaxxer")
+        assert home.execute("${package}/bin/vibemaxxer run --rules ${standaloneRules} --log /tmp/run.log -- sh -c 'exit 7'")[0] == 7
 
     with subtest("AWS policy is enforced independently"):
         refused("https://denied.example/", 403, "vibemaxxer-server; error=http_request_denied")
