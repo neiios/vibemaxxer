@@ -79,9 +79,13 @@ The limits:
 
 - If the command is itself a bash or zsh script, it loses the variables too
   and nothing is proxied.
-- bash reads `BASH_ENV` only when it isn't interactive and isn't running as
-  `sh`. Interactive bash, `sh`, dash, fish and programs the command starts
-  without a shell keep the proxy.
+- bash reads the hook only when it isn't interactive and isn't in POSIX or
+  privileged mode, and zsh only when it reads its startup files. So
+  interactive bash, `bash --posix`, `bash -p`, `zsh -f`, either shell running
+  as `sh`, and zsh on a system whose `/etc/zshenv` sets `ZDOTDIR` keep the
+  proxy. So do dash, fish and programs the command starts without a shell.
+- Your own `BASH_ENV` has to be a plain path. bash expands variables in it,
+  but the hook reads it as written and skips a file it can't find.
 - The removed variables aren't replaced with the ones you had before the run.
 
 A `vibemaxxer run` started from such a shell still finds the outer proxy and

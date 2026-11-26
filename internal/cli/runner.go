@@ -87,8 +87,13 @@ func runCommand(args []string) error {
 			return err
 		}
 	}
+	if *direct {
+		if err := directShells(); err != nil {
+			return err
+		}
+	}
 	if address, ok := outerProxy(os.Getenv(runMarker), digest); ok {
-		if err := setProxy(address, *direct); err != nil {
+		if err := setProxy(address); err != nil {
 			return err
 		}
 		return syscall.Exec(path, command, os.Environ())
@@ -125,7 +130,7 @@ func runCommand(args []string) error {
 	go server.Serve(listener)
 
 	address := listener.Addr().String()
-	if err := setProxy(address, *direct); err != nil {
+	if err := setProxy(address); err != nil {
 		return err
 	}
 	if err := os.Setenv(runMarker, address+"/"+hex.EncodeToString(nonce)); err != nil {
@@ -178,14 +183,11 @@ func outerProxy(marker, digest string) (string, bool) {
 	return address, resp.StatusCode == http.StatusNoContent
 }
 
-func setProxy(address string, direct bool) error {
+func setProxy(address string) error {
 	for _, name := range proxyVariables {
 		if err := os.Setenv(name, "http://"+address); err != nil {
 			return err
 		}
-	}
-	if direct {
-		return directShells()
 	}
 	return nil
 }

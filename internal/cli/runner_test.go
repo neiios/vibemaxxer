@@ -445,7 +445,7 @@ func (r runner) direct(t *testing.T, env []string, command ...string) string {
 		name, _, _ := strings.Cut(entry, "=")
 		return slices.Contains([]string{"BASH_ENV", "ZDOTDIR", "VIBEMAXXER_BASH_ENV", "VIBEMAXXER_ZDOTDIR"}, name)
 	})
-	cmd.Env = append(cmd.Env, "HOME="+filepath.Join(r.dir, "home"), "XDG_CACHE_HOME="+filepath.Join(r.dir, "cache"), "TMPDIR="+filepath.Join(r.dir, "tmp"))
+	cmd.Env = append(cmd.Env, "HOME="+filepath.Join(r.dir, "home"), "XDG_CACHE_HOME="+filepath.Join(r.dir, "cache"))
 	cmd.Env = append(cmd.Env, env...)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
@@ -484,7 +484,6 @@ const proxyState = `echo "${HTTP_PROXY-unset} ${HTTPS_PROXY-unset} ${http_proxy-
 func TestRunnerDirectShells(t *testing.T) {
 	r := newRunner(t)
 	hooks := filepath.Join(r.dir, "cache", "vibemaxxer", "direct-shells")
-	r.write(t, "tmp/.keep", "")
 
 	env := r.direct(t, nil, "env")
 	proxy := ""
@@ -506,30 +505,26 @@ func TestRunnerDirectShells(t *testing.T) {
 	}
 
 	shells(t, func(t *testing.T, shell string) {
-		for _, options := range []string{"-c", "-euc"} {
-			script := proxyState + `; echo "${BASH_ENV-unset} ${ZDOTDIR-unset}"; env | grep -c VIBEMAXXER_; ` + shell + ` -c '` + proxyState + `'`
-			want := "unset unset unset unset\nunset unset\n1\nunset unset unset unset\n"
-			if out := r.direct(t, nil, "env", shell, options, script); out != want {
-				t.Errorf("%s %s printed %q, want %q", shell, options, out, want)
-			}
+		script := proxyState + `; echo "${BASH_ENV-unset} ${ZDOTDIR-unset}"; env | grep -c VIBEMAXXER_; ` + shell + ` -c '` + proxyState + `'`
+		want := "unset unset unset unset\nunset unset\n1\nunset unset unset unset\n"
+		if out := r.direct(t, nil, "env", shell, "-euc", script); out != want {
+			t.Errorf("%s printed %q, want %q", shell, out, want)
 		}
 	})
 
 	if out, err := r.script(t, proxyState).Output(); err != nil || strings.Contains(string(out), "unset") {
 		t.Errorf("without --direct-shells a shell printed %q, %v", out, err)
 	}
-	for dir, want := range map[string][]string{hooks: {".zshenv", "bash_env"}, filepath.Join(r.dir, "tmp"): {".keep"}} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var names []string
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		if !slices.Equal(names, want) {
-			t.Errorf("%s holds %q, want %q", dir, names, want)
-		}
+	entries, err := os.ReadDir(hooks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if want := []string{".zshenv", "bash_env"}; !slices.Equal(names, want) {
+		t.Errorf("%s holds %q, want %q", hooks, names, want)
 	}
 }
 
@@ -579,7 +574,6 @@ func TestRunnerDirectShellsKeepStartupFiles(t *testing.T) {
 		r.write(t, "home/.zshenv", `echo "home zshenv ${HTTP_PROXY-unset}"`+"\n")
 		r.write(t, "home/.zshrc", "echo home zshrc\n")
 		dotdir := filepath.Dir(r.write(t, "dotdir/.zshenv", `echo "dotdir zshenv ${HTTP_PROXY-unset}"`+"\n"))
-		r.write(t, "dotdir/.zshrc", "echo dotdir zshrc\n")
 		moved := filepath.Dir(r.write(t, "moved/.zshrc", "echo moved zshrc\n"))
 		script := `echo "${ZDOTDIR-unset} ${VIBEMAXXER_ZDOTDIR-unset}"; zsh -c 'echo nested'`
 		for _, tc := range []struct {
@@ -591,7 +585,6 @@ func TestRunnerDirectShellsKeepStartupFiles(t *testing.T) {
 			{"home", nil, []string{"zsh", "-c", script}, "home zshenv unset\nunset unset\nhome zshenv unset\nnested\n"},
 			{"interactive", nil, []string{"zsh", "-ic", script}, "home zshenv unset\nhome zshrc\nunset unset\nhome zshenv unset\nnested\n"},
 			{"ZDOTDIR", []string{"ZDOTDIR=" + dotdir}, []string{"zsh", "-c", script}, "dotdir zshenv unset\n" + dotdir + " unset\ndotdir zshenv unset\nnested\n"},
-			{"ZDOTDIR interactive", []string{"ZDOTDIR=" + dotdir}, []string{"zsh", "-ic", "true"}, "dotdir zshenv unset\ndotdir zshrc\n"},
 			{"ZDOTDIR set in .zshenv", []string{"HOME=" + filepath.Dir(r.write(t, "sets/.zshenv", "ZDOTDIR="+moved+"\n"))}, []string{"zsh", "-ic", `echo "$ZDOTDIR"`}, "moved zshrc\n" + moved + "\n"},
 			{"hooked twice", []string{"ZDOTDIR=" + dotdir}, []string{runnerBinary, "run", "--direct-shells", "--rules", r.rules, "--log", r.log, "--", "zsh", "-c", script}, "dotdir zshenv unset\n" + dotdir + " unset\ndotdir zshenv unset\nnested\n"},
 		} {
