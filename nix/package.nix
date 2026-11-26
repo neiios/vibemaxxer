@@ -6,6 +6,7 @@
   tzdata,
   iana-etc,
   mailcap,
+  zsh,
   src,
 }:
 (buildGo127Module.override { stdenv = stdenvNoCC; }) {
@@ -30,6 +31,7 @@
     runHook postCheck
   '';
   nativeBuildInputs = [ removeReferencesTo ];
+  nativeCheckInputs = [ zsh ];
   dontPatchShebangs = true;
   postFixup = ''
     remove-references-to -t ${tzdata} -t ${iana-etc} -t ${mailcap} $out/bin/vibemaxxer

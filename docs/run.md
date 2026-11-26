@@ -52,6 +52,41 @@ invisible there:
 Anything the command leaves running after it exits loses its proxy and fails
 its requests, since the proxy variables still point at the closed port.
 
+## Keeping shell commands off the proxy
+
+Everything the command starts inherits the proxy variables. For an agent
+that's often unwanted: the commands it runs for you are proxied too, and tools
+like podman pass the variables on into containers, where `127.0.0.1` is the
+container itself.
+
+`--direct-shells` proxies only the command. Every bash and zsh started below
+it removes the proxy variables as it starts, so those shells and all they run
+connect directly, past the rules:
+
+```sh
+vibemaxxer run --rules client.rules --direct-shells claude
+```
+
+A process can't hide variables from its children, so this hooks the shells'
+startup files instead. `BASH_ENV` and `ZDOTDIR` point at two small files under
+`~/.cache/vibemaxxer/direct-shells`, or under `$XDG_CACHE_HOME`. The files
+never change, so nothing is created per run or left to clean up. The first
+shell to read one removes the proxy variables and puts `BASH_ENV` and
+`ZDOTDIR` back as they were. It then reads your own `BASH_ENV` file or
+`.zshenv`, and zsh goes on to the rest of your startup files as usual.
+
+The limits:
+
+- If the command is itself a bash or zsh script, it loses the variables too
+  and nothing is proxied.
+- bash reads `BASH_ENV` only when it isn't interactive and isn't running as
+  `sh`. Interactive bash, `sh`, dash, fish and programs the command starts
+  without a shell keep the proxy.
+- The removed variables aren't replaced with the ones you had before the run.
+
+A `vibemaxxer run` started from such a shell still finds the outer proxy and
+[shares it](#nested-runs).
+
 ## Nested runs
 
 A `vibemaxxer run` started from inside another one checks whether the outer

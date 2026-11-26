@@ -41,6 +41,19 @@ const (
 	drainTimeout = 500 * time.Millisecond
 )
 
+const restoreStartup = `if [ "${VIBEMAXXER_BASH_ENV+set}" ]; then BASH_ENV=$VIBEMAXXER_BASH_ENV; else unset BASH_ENV; fi
+if [ "${VIBEMAXXER_ZDOTDIR+set}" ]; then ZDOTDIR=$VIBEMAXXER_ZDOTDIR; else unset ZDOTDIR; fi
+unset VIBEMAXXER_BASH_ENV VIBEMAXXER_ZDOTDIR
+`
+
+const bashStartup = `if [ -f "${BASH_ENV-}" ] && [ -r "$BASH_ENV" ]; then . "$BASH_ENV"; fi
+`
+
+const zshStartup = `if [[ -r ${ZDOTDIR-$HOME}/.zshenv ]]; then . ${ZDOTDIR-$HOME}/.zshenv; fi
+`
+
+var proxyVariables = []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"}
+
 type exitStatus int
 
 func (e exitStatus) Error() string { return "exit status " + strconv.Itoa(int(e)) }
@@ -50,6 +63,7 @@ func runCommand(args []string) error {
 	var opts options
 	opts.flags(flags, policy.Client)
 	logPath := flags.String("log", defaultLogPath(), "append the request log to `FILE`")
+	direct := flags.Bool("direct-shells", false, "make bash and zsh started by COMMAND drop the proxy variables")
 	if err := parseOptions(flags, runnerHeader, args); err != nil {
 		return err
 	}
@@ -74,7 +88,7 @@ func runCommand(args []string) error {
 		}
 	}
 	if address, ok := outerProxy(os.Getenv(runMarker), digest); ok {
-		if err := setProxy(address); err != nil {
+		if err := setProxy(address, *direct); err != nil {
 			return err
 		}
 		return syscall.Exec(path, command, os.Environ())
@@ -111,7 +125,7 @@ func runCommand(args []string) error {
 	go server.Serve(listener)
 
 	address := listener.Addr().String()
-	if err := setProxy(address); err != nil {
+	if err := setProxy(address, *direct); err != nil {
 		return err
 	}
 	if err := os.Setenv(runMarker, address+"/"+hex.EncodeToString(nonce)); err != nil {
@@ -164,11 +178,65 @@ func outerProxy(marker, digest string) (string, bool) {
 	return address, resp.StatusCode == http.StatusNoContent
 }
 
-func setProxy(address string) error {
-	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+func setProxy(address string, direct bool) error {
+	for _, name := range proxyVariables {
 		if err := os.Setenv(name, "http://"+address); err != nil {
 			return err
 		}
+	}
+	if direct {
+		return directShells()
+	}
+	return nil
+}
+
+func directShells() error {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return err
+	}
+	dir = filepath.Join(dir, "vibemaxxer", "direct-shells")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	restore := "unset " + strings.Join(proxyVariables, " ") + "\n" + restoreStartup
+	for _, hook := range []struct{ name, value, saved, file, script string }{
+		{"BASH_ENV", filepath.Join(dir, "bash_env"), "VIBEMAXXER_BASH_ENV", "bash_env", bashStartup},
+		{"ZDOTDIR", dir, "VIBEMAXXER_ZDOTDIR", ".zshenv", zshStartup},
+	} {
+		if err := writeFile(filepath.Join(dir, hook.file), restore+hook.script); err != nil {
+			return err
+		}
+		old, ok := os.LookupEnv(hook.name)
+		if old == hook.value {
+			continue
+		}
+		if ok {
+			err = os.Setenv(hook.saved, old)
+		} else {
+			err = os.Unsetenv(hook.saved)
+		}
+		if err != nil {
+			return err
+		}
+		if err := os.Setenv(hook.name, hook.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeFile(path, content string) error {
+	if old, err := os.ReadFile(path); err == nil && string(old) == content {
+		return nil
+	}
+	temp := path + "." + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(temp, []byte(content), 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(temp, path); err != nil {
+		os.Remove(temp)
+		return err
 	}
 	return nil
 }

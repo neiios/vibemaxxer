@@ -45,7 +45,8 @@ vibemaxxer run --rules client.rules curl https://example.com
 ```
 
 [vibemaxxer run](docs/run.md) starts a proxy for that command alone and stops
-it when the command exits.
+it when the command exits. With `--direct-shells` only the program itself is
+proxied, and the shell commands it runs connect directly.
 
 ## Routing through another machine
 

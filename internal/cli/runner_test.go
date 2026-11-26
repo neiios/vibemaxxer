@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -430,9 +431,173 @@ func TestRunnerUsage(t *testing.T) {
 		t.Errorf("an invalid invocation ran its command: %v", err)
 	}
 	out, err = r.command(t, "--help").CombinedOutput()
-	for _, want := range []string{"--rules FILE", "--log FILE", "--upstream ADDR", "--server HOST:PORT"} {
+	for _, want := range []string{"--rules FILE", "--log FILE", "--direct-shells", "--upstream ADDR", "--server HOST:PORT"} {
 		if err != nil || !strings.Contains(string(out), want) {
 			t.Errorf("help is missing %q: %q, %v", want, out, err)
 		}
 	}
+}
+
+func (r runner) direct(t *testing.T, env []string, command ...string) string {
+	t.Helper()
+	cmd := r.command(t, append([]string{"--direct-shells", "--rules", r.rules, "--log", r.log, "--"}, command...)...)
+	cmd.Env = slices.DeleteFunc(cmd.Env, func(entry string) bool {
+		name, _, _ := strings.Cut(entry, "=")
+		return slices.Contains([]string{"BASH_ENV", "ZDOTDIR", "VIBEMAXXER_BASH_ENV", "VIBEMAXXER_ZDOTDIR"}, name)
+	})
+	cmd.Env = append(cmd.Env, "HOME="+filepath.Join(r.dir, "home"), "XDG_CACHE_HOME="+filepath.Join(r.dir, "cache"), "TMPDIR="+filepath.Join(r.dir, "tmp"))
+	cmd.Env = append(cmd.Env, env...)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%v: %v\n%s", command, err, out)
+	}
+	return string(out)
+}
+
+func (r runner) write(t *testing.T, name, content string) string {
+	t.Helper()
+	path := filepath.Join(r.dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func shells(t *testing.T, test func(t *testing.T, shell string)) {
+	t.Helper()
+	for _, shell := range []string{"bash", "zsh"} {
+		t.Run(shell, func(t *testing.T) {
+			if _, err := exec.LookPath(shell); err != nil {
+				t.Skip(shell + " is not installed")
+			}
+			test(t, shell)
+		})
+	}
+}
+
+const proxyState = `echo "${HTTP_PROXY-unset} ${HTTPS_PROXY-unset} ${http_proxy-unset} ${https_proxy-unset}"`
+
+func TestRunnerDirectShells(t *testing.T) {
+	r := newRunner(t)
+	hooks := filepath.Join(r.dir, "cache", "vibemaxxer", "direct-shells")
+	r.write(t, "tmp/.keep", "")
+
+	env := r.direct(t, nil, "env")
+	proxy := ""
+	for _, name := range proxyVariables {
+		_, value, _ := strings.Cut(env, "\n"+name+"=http://")
+		value, _, _ = strings.Cut(value, "\n")
+		if loopback("proxy", value) != nil || proxy != "" && value != proxy {
+			t.Fatalf("command has %s = %q:\n%s", name, value, env)
+		}
+		proxy = value
+	}
+	for _, want := range []string{"\nBASH_ENV=" + hooks + "/bash_env\n", "\nZDOTDIR=" + hooks + "\n"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("command environment is missing %q:\n%s", want, env)
+		}
+	}
+	if strings.Contains(env, "VIBEMAXXER_BASH_ENV=") || strings.Contains(env, "VIBEMAXXER_ZDOTDIR=") {
+		t.Errorf("command environment saves startup files that were not set:\n%s", env)
+	}
+
+	shells(t, func(t *testing.T, shell string) {
+		for _, options := range []string{"-c", "-euc"} {
+			script := proxyState + `; echo "${BASH_ENV-unset} ${ZDOTDIR-unset}"; env | grep -c VIBEMAXXER_; ` + shell + ` -c '` + proxyState + `'`
+			want := "unset unset unset unset\nunset unset\n1\nunset unset unset unset\n"
+			if out := r.direct(t, nil, "env", shell, options, script); out != want {
+				t.Errorf("%s %s printed %q, want %q", shell, options, out, want)
+			}
+		}
+	})
+
+	if out, err := r.script(t, proxyState).Output(); err != nil || strings.Contains(string(out), "unset") {
+		t.Errorf("without --direct-shells a shell printed %q, %v", out, err)
+	}
+	for dir, want := range map[string][]string{hooks: {".zshenv", "bash_env"}, filepath.Join(r.dir, "tmp"): {".keep"}} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("%s holds %q, want %q", dir, names, want)
+		}
+	}
+}
+
+func TestRunnerDirectShellsNesting(t *testing.T) {
+	r := newRunner(t)
+	shells(t, func(t *testing.T, shell string) {
+		os.Remove(r.log)
+		nested := `"$1" run --direct-shells --rules "$2" --log "$3" -- `
+		out := r.direct(t, nil, shell, "-c", proxyState+`; echo "${VIBEMAXXER_RUN%%/*}"; `+nested+`env | grep -x "HTTP_PROXY=.*"; `+nested+shell+` -c '`+proxyState+`'`,
+			"command", runnerBinary, r.rules, r.log)
+		lines := strings.Split(out, "\n")
+		if len(lines) != 5 || lines[0] != "unset unset unset unset" || loopback("proxy", lines[1]) != nil || lines[2] != "HTTP_PROXY=http://"+lines[1] || lines[3] != lines[0] {
+			t.Fatalf("nested runs printed %q", out)
+		}
+		log, err := os.ReadFile(r.log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(log), "msg=listening") != 1 {
+			t.Fatalf("nested runs did not share one proxy:\n%s", log)
+		}
+	})
+}
+
+func TestRunnerDirectShellsKeepStartupFiles(t *testing.T) {
+	r := newRunner(t)
+	t.Run("bash", func(t *testing.T) {
+		user := r.write(t, "user/bash_env", `echo "user ${HTTP_PROXY-unset}"`+"\n")
+		script := `echo "$BASH_ENV ${VIBEMAXXER_BASH_ENV-unset}"; bash -c 'echo nested'`
+		want := "user unset\n" + user + " unset\nuser unset\nnested\n"
+		for _, command := range [][]string{
+			{"bash", "-c", script},
+			{runnerBinary, "run", "--direct-shells", "--rules", r.rules, "--log", r.log, "--", "bash", "-c", script},
+		} {
+			if out := r.direct(t, []string{"BASH_ENV=" + user}, command...); out != want {
+				t.Errorf("%v printed %q, want %q", command, out, want)
+			}
+		}
+		if out := r.direct(t, []string{"BASH_ENV=" + filepath.Join(r.dir, "missing")}, "bash", "-c", "echo ran"); out != "ran\n" {
+			t.Errorf("a missing BASH_ENV printed %q", out)
+		}
+	})
+	t.Run("zsh", func(t *testing.T) {
+		if _, err := exec.LookPath("zsh"); err != nil {
+			t.Skip("zsh is not installed")
+		}
+		r.write(t, "home/.zshenv", `echo "home zshenv ${HTTP_PROXY-unset}"`+"\n")
+		r.write(t, "home/.zshrc", "echo home zshrc\n")
+		dotdir := filepath.Dir(r.write(t, "dotdir/.zshenv", `echo "dotdir zshenv ${HTTP_PROXY-unset}"`+"\n"))
+		r.write(t, "dotdir/.zshrc", "echo dotdir zshrc\n")
+		moved := filepath.Dir(r.write(t, "moved/.zshrc", "echo moved zshrc\n"))
+		script := `echo "${ZDOTDIR-unset} ${VIBEMAXXER_ZDOTDIR-unset}"; zsh -c 'echo nested'`
+		for _, tc := range []struct {
+			name    string
+			env     []string
+			command []string
+			want    string
+		}{
+			{"home", nil, []string{"zsh", "-c", script}, "home zshenv unset\nunset unset\nhome zshenv unset\nnested\n"},
+			{"interactive", nil, []string{"zsh", "-ic", script}, "home zshenv unset\nhome zshrc\nunset unset\nhome zshenv unset\nnested\n"},
+			{"ZDOTDIR", []string{"ZDOTDIR=" + dotdir}, []string{"zsh", "-c", script}, "dotdir zshenv unset\n" + dotdir + " unset\ndotdir zshenv unset\nnested\n"},
+			{"ZDOTDIR interactive", []string{"ZDOTDIR=" + dotdir}, []string{"zsh", "-ic", "true"}, "dotdir zshenv unset\ndotdir zshrc\n"},
+			{"ZDOTDIR set in .zshenv", []string{"HOME=" + filepath.Dir(r.write(t, "sets/.zshenv", "ZDOTDIR="+moved+"\n"))}, []string{"zsh", "-ic", `echo "$ZDOTDIR"`}, "moved zshrc\n" + moved + "\n"},
+			{"hooked twice", []string{"ZDOTDIR=" + dotdir}, []string{runnerBinary, "run", "--direct-shells", "--rules", r.rules, "--log", r.log, "--", "zsh", "-c", script}, "dotdir zshenv unset\n" + dotdir + " unset\ndotdir zshenv unset\nnested\n"},
+		} {
+			if out := r.direct(t, tc.env, tc.command...); out != tc.want {
+				t.Errorf("%s: printed %q, want %q", tc.name, out, tc.want)
+			}
+		}
+	})
 }
